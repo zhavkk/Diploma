@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package orchestrator.v1;
+
+option go_package = "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1;orchestratorv1";
+
+// OrchestratorService — gRPC API для управления кластером (SRE Engineer → Orchestrator)
+service OrchestratorService {
+  // Статус кластера
+  rpc GetClusterStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
+
+  // Ручной failover: перевести выбранный узел в primary
+  rpc TriggerFailover(TriggerFailoverRequest) returns (TriggerFailoverResponse);
+
+  // Изменить конфигурацию репликации (synchronous_standby_names и др.)
+  rpc UpdateReplicationConfig(UpdateReplicationConfigRequest) returns (UpdateReplicationConfigResponse);
+
+  // Список узлов кластера
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+}
+
+// --- Cluster Status ---
+
+message GetClusterStatusRequest {}
+
+message GetClusterStatusResponse {
+  ClusterStatus status = 1;
+}
+
+message ClusterStatus {
+  string          primary_node = 1;
+  repeated string replica_nodes = 2;
+  string          topology_version = 3;
+  bool            failover_in_progress = 4;
+}
+
+// --- Failover ---
+
+message TriggerFailoverRequest {
+  string target_node = 1; // узел, которому делаем promote
+}
+
+message TriggerFailoverResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// --- Replication Config ---
+
+message UpdateReplicationConfigRequest {
+  string synchronous_standby_names = 1;
+  bool   enable_sync_replication   = 2;
+}
+
+message UpdateReplicationConfigResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// --- List Nodes ---
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated NodeInfo nodes = 1;
+}
+
+message NodeInfo {
+  string node_id   = 1;
+  string address   = 2;
+  string role      = 3; // "primary" | "replica"
+  bool   healthy   = 4;
+  int64  wal_lag   = 5; // байты отставания от primary (0 для primary)
+}

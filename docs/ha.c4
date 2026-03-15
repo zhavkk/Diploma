@@ -1,0 +1,160 @@
+specification {
+    element actor {
+        style {
+            shape person
+        }
+    }
+    element system {
+        style {
+            shape rectangle
+        }
+    }
+    element component {
+        style {
+            shape rectangle
+        }
+    }
+    element database {
+        style {
+            shape cylinder
+        }
+    }
+}
+
+model {
+
+    engineer = actor 'SRE Engineer' {
+        description 'Управляет кластером через UI/CLI'
+    }
+
+    application = actor 'Application' {
+        description 'Внешнее приложение, читает и пишет в БД'
+    }
+
+    HA_orchestrator = system 'HA Control System' {
+        description 'Control Plane: оркестрация отказоустойчивости PostgreSQL'
+
+        cluster_control_service = component 'Cluster Control Service' {
+            description 'REST/gRPC API — точка входа управления кластером'
+        }
+
+        health_monitor = component 'Health Monitor' {
+            description 'Получает heartbeat от узлов и отслеживает их состояние'
+        }
+
+        failover_manager = component 'Failover Manager' {
+            description 'Принимает решения о failover и выборе нового primary'
+        }
+
+        replication_configurator = component 'Replication Configurator' {
+            description 'Конфигурирует параметры streaming replication PostgreSQL: synchronous_standby_names, recovery.conf, pg_hba.conf для replication slots'
+        }
+
+        coordination_module = component 'Distributed Coordination Module' {
+            description 'Использует etcd для leader election и distributed lock'
+        }
+
+        topology_registry = component 'Topology Registry' {
+            description 'Хранит актуальную топологию кластера'
+        }
+    }
+
+    load_balancer = system 'HAProxy Load Balancer' {
+        description 'Маршрутизация клиентских запросов (writes → primary, reads → replicas)'
+    }
+
+    node_agent = system 'Node Agent (per DB node)' {
+        description 'Агент, развернутый на каждом узле БД (отдельный экземпляр на primary и каждой реплике). Предоставляет HTTP health endpoint для HAProxy'
+
+        db_probe = component 'DB Probe' {
+            description 'Собирает статус БД: pg_is_in_recovery(), pg_stat_replication, pg_last_wal_replay_lsn(), role, lag, availability. Отдаёт HTTP /health endpoint'
+        }
+
+        replication_watcher = component 'Replication Watcher' {
+            description 'Отслеживает состояние streaming replication: write_lag, flush_lag, replay_lag, состояние replication slots'
+        }
+
+        node_controller = component 'Node Controller' {
+            description 'Выполняет команды: promote, pg_rewind (ресинхронизация бывшего primary), reconfigure recovery.conf / postgresql.conf, restart'
+        }
+    }
+
+    db_cluster = system 'PostgreSQL Cluster' {
+        description 'Data Plane: физическая streaming replication'
+
+        pg_primary = database 'PostgreSQL Primary' {
+            description 'Ведущий узел БД'
+        }
+
+        pg_replica1 = database 'PostgreSQL Replica 1' {
+            description 'Синхронная реплика (synchronous_commit = on) — гарантирует zero data loss при failover'
+        }
+
+        pg_replica2 = database 'PostgreSQL Replica 2' {
+            description 'Асинхронная реплика — для read-scaling'
+        }
+    }
+
+    etcd = system 'etcd' {
+        description 'Распределённое KV-хранилище для election и cluster state'
+    }
+
+
+    engineer -> HA_orchestrator.cluster_control_service 'Управляет кластером'
+    application -> load_balancer 'Отправляет SQL-запросы'
+
+    load_balancer -> db_cluster.pg_primary 'Writes'
+    load_balancer -> db_cluster.pg_replica1 'Reads'
+    load_balancer -> db_cluster.pg_replica2 'Reads'
+    load_balancer -> node_agent.db_probe 'Health check (HTTP /health) — определяет роль узла'
+
+    node_agent.db_probe -> db_cluster.pg_primary 'pg_is_in_recovery(), pg_stat_replication'
+    node_agent.db_probe -> db_cluster.pg_replica1 'pg_last_wal_replay_lsn(), pg_is_in_recovery()'
+    node_agent.db_probe -> db_cluster.pg_replica2 'pg_last_wal_replay_lsn(), pg_is_in_recovery()'
+
+    node_agent.db_probe -> HA_orchestrator.health_monitor 'Heartbeat + status'
+    node_agent.replication_watcher -> HA_orchestrator.health_monitor 'Replication metrics (lag, slot state)'
+
+    HA_orchestrator.cluster_control_service -> HA_orchestrator.topology_registry 'Read cluster state (для ответа на API запросы)'
+    HA_orchestrator.cluster_control_service -> HA_orchestrator.replication_configurator 'Trigger reconfig (admin-инициированные изменения)'
+    HA_orchestrator.topology_registry -> HA_orchestrator.cluster_control_service 'Cluster state for status API'
+
+    HA_orchestrator.health_monitor -> HA_orchestrator.failover_manager 'Failure detected'
+    HA_orchestrator.failover_manager -> HA_orchestrator.coordination_module 'Leader election'
+    HA_orchestrator.coordination_module -> etcd 'Distributed lock / election'
+    HA_orchestrator.failover_manager -> HA_orchestrator.topology_registry 'Update topology'
+    HA_orchestrator.failover_manager -> HA_orchestrator.replication_configurator 'Reconfigure replication after failover'
+    HA_orchestrator.topology_registry -> etcd 'Persist cluster state'
+
+    HA_orchestrator.failover_manager -> node_agent.node_controller 'Promote / Reconfigure'
+    HA_orchestrator.replication_configurator -> node_agent.node_controller 'Apply replication config'
+
+    HA_orchestrator.failover_manager -> load_balancer 'Update routing after failover'
+
+    db_cluster.pg_primary -> db_cluster.pg_replica1 'Streaming Replication (sync)'
+    db_cluster.pg_primary -> db_cluster.pg_replica2 'Streaming Replication (async)'
+
+
+}
+
+views {
+    view index {
+        title 'HA Control System — Overview'
+        include *
+    }
+
+    view orchestrator of HA_orchestrator {
+        title 'Control Plane — Internal Components'
+        include HA_orchestrator.*
+        include engineer
+        include node_agent
+        include etcd
+    }
+
+    view database_cluster of db_cluster {
+        title 'PostgreSQL Cluster — Data Plane'
+        include db_cluster.*
+        include load_balancer
+        include node_agent
+    }
+}
