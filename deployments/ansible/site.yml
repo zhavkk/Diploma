@@ -1,0 +1,28 @@
+---
+# Главный playbook — деплой всего кластера
+# Запуск: ansible-playbook -i inventory.yml site.yml
+
+- name: Deploy etcd cluster
+  hosts: etcd_nodes
+  become: true
+  roles:
+    - etcd
+
+- name: Deploy PostgreSQL nodes
+  hosts: pg_nodes
+  become: true
+  roles:
+    - postgresql
+    - node-agent
+
+- name: Deploy HA Orchestrator
+  hosts: orchestrator
+  become: true
+  roles:
+    - orchestrator
+
+- name: Deploy HAProxy
+  hosts: haproxy
+  become: true
+  roles:
+    - haproxy

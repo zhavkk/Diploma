@@ -1,0 +1,15 @@
+[Unit]
+Description=HA Orchestrator (Control Plane)
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ID={{ node_id }}
+Environment=ETCD_ENDPOINTS={% for h in groups['etcd_nodes'] %}http://{{ hostvars[h]['ansible_host'] }}:2379{% if not loop.last %},{% endif %}{% endfor %}
+
+ExecStart=/usr/local/bin/ha-orchestrator
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

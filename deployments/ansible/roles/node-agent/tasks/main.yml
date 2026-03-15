@@ -1,0 +1,23 @@
+---
+# Деплой node-agent на каждый PostgreSQL-узел
+# node-agent запускается co-located с PostgreSQL (на том же хосте),
+# т.к. нуждается в доступе к локальному PGDATA и pg_ctl
+
+- name: Copy node-agent binary
+  copy:
+    src: "{{ playbook_dir }}/../../bin/node-agent"
+    dest: /usr/local/bin/node-agent
+    mode: '0755'
+
+- name: Create node-agent systemd unit
+  template:
+    src: node-agent.service.j2
+    dest: /etc/systemd/system/node-agent.service
+  notify: restart node-agent
+
+- name: Enable and start node-agent
+  systemd:
+    name: node-agent
+    enabled: true
+    state: started
+    daemon_reload: true
