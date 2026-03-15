@@ -1,13 +1,30 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	orchestratorv1 "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1"
 )
 
 var orchestratorAddr string
+
+var testDialFn func(ctx context.Context, addr string) (net.Conn, error)
+
+func dial(addr string) (*grpc.ClientConn, error) {
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if testDialFn != nil {
+		opts = append(opts, grpc.WithContextDialer(testDialFn))
+	}
+	return grpc.NewClient(addr, opts...)
+}
 
 func main() {
 	root := &cobra.Command{
@@ -19,10 +36,10 @@ func main() {
 		"Адрес gRPC API оркестратора")
 
 	root.AddCommand(
-		cmdStatus(),
-		cmdFailover(),
-		cmdNodes(),
-		cmdReplication(),
+		newCmdStatus(),
+		newCmdFailover(),
+		newCmdNodes(),
+		newCmdReplication(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -31,50 +48,107 @@ func main() {
 	}
 }
 
-func cmdStatus() *cobra.Command {
+func newCmdStatus() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Показать текущий статус кластера",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: gRPC вызов OrchestratorService.GetClusterStatus
-			fmt.Printf("Connecting to orchestrator at %s...\n", orchestratorAddr)
-			fmt.Println("Cluster status: OK (not yet implemented)")
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runStatus(orchestratorAddr, cmd.OutOrStdout())
 		},
 	}
 }
 
-func cmdFailover() *cobra.Command {
+func runStatus(addr string, w io.Writer) error {
+	conn, err := dial(addr)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
+		GetClusterStatus(context.Background(), &orchestratorv1.GetClusterStatusRequest{})
+	if err != nil {
+		return fmt.Errorf("GetClusterStatus: %w", err)
+	}
+
+	fmt.Fprintf(w, "Primary:  %s\n", resp.Status.PrimaryNode)
+	fmt.Fprintf(w, "Replicas: %v\n", resp.Status.ReplicaNodes)
+	fmt.Fprintf(w, "Version:  %s\n", resp.Status.TopologyVersion)
+	return nil
+}
+
+func newCmdFailover() *cobra.Command {
 	var targetNode string
 	cmd := &cobra.Command{
 		Use:   "failover",
 		Short: "Инициировать ручной failover на указанный узел",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if targetNode == "" {
 				return fmt.Errorf("--target требует указания node-id")
 			}
-			// TODO: gRPC вызов OrchestratorService.TriggerFailover
-			fmt.Printf("Triggering failover to node %q via %s...\n", targetNode, orchestratorAddr)
-			return nil
+			return runFailover(orchestratorAddr, targetNode, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().StringVar(&targetNode, "target", "", "Node ID нового primary")
 	return cmd
 }
 
-func cmdNodes() *cobra.Command {
+func runFailover(addr, targetNode string, w io.Writer) error {
+	conn, err := dial(addr)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
+		TriggerFailover(context.Background(), &orchestratorv1.TriggerFailoverRequest{
+			TargetNode: targetNode,
+		})
+	if err != nil {
+		return fmt.Errorf("TriggerFailover: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("failover rejected: %s", resp.Message)
+	}
+	fmt.Fprintf(w, "Failover to %q: %s\n", targetNode, resp.Message)
+	return nil
+}
+
+func newCmdNodes() *cobra.Command {
 	return &cobra.Command{
 		Use:   "nodes",
 		Short: "Список узлов кластера с их статусом",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: gRPC вызов OrchestratorService.ListNodes
-			fmt.Printf("Listing nodes from %s...\n", orchestratorAddr)
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runNodes(orchestratorAddr, cmd.OutOrStdout())
 		},
 	}
 }
 
-func cmdReplication() *cobra.Command {
+func runNodes(addr string, w io.Writer) error {
+	conn, err := dial(addr)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
+		ListNodes(context.Background(), &orchestratorv1.ListNodesRequest{})
+	if err != nil {
+		return fmt.Errorf("ListNodes: %w", err)
+	}
+
+	fmt.Fprintf(w, "%-20s %-10s %-10s %s\n", "NODE", "ROLE", "HEALTHY", "WAL_LAG")
+	for _, n := range resp.Nodes {
+		healthy := "yes"
+		if !n.Healthy {
+			healthy = "no"
+		}
+		fmt.Fprintf(w, "%-20s %-10s %-10s %d\n", n.NodeId, n.Role, healthy, n.WalLag)
+	}
+	return nil
+}
+
+func newCmdReplication() *cobra.Command {
 	repl := &cobra.Command{
 		Use:   "replication",
 		Short: "Управление параметрами репликации",
@@ -84,14 +158,34 @@ func cmdReplication() *cobra.Command {
 	setSync := &cobra.Command{
 		Use:   "set-sync",
 		Short: "Задать synchronous_standby_names",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: gRPC вызов OrchestratorService.UpdateReplicationConfig
-			fmt.Printf("Setting synchronous_standby_names=%q via %s...\n", names, orchestratorAddr)
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSetSync(orchestratorAddr, names, cmd.OutOrStdout())
 		},
 	}
 	setSync.Flags().StringVar(&names, "names", "", "Имена синхронных реплик")
 	repl.AddCommand(setSync)
 
 	return repl
+}
+
+func runSetSync(addr, names string, w io.Writer) error {
+	conn, err := dial(addr)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
+		UpdateReplicationConfig(context.Background(), &orchestratorv1.UpdateReplicationConfigRequest{
+			SynchronousStandbyNames: names,
+			EnableSyncReplication:   names != "",
+		})
+	if err != nil {
+		return fmt.Errorf("UpdateReplicationConfig: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("update rejected: %s", resp.Message)
+	}
+	fmt.Fprintf(w, "synchronous_standby_names=%q: %s\n", names, resp.Message)
+	return nil
 }

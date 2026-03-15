@@ -47,8 +47,9 @@ type FailoverEvent struct {
 }
 
 type ReplicationConfig struct {
+	PrimaryConnInfo         string `json:"primary_conn_info"`
 	SynchronousStandbyNames string `json:"synchronous_standby_names"`
 	EnableSyncReplication   bool   `json:"enable_sync_replication"`
 	MaxWALSenders           int    `json:"max_wal_senders"`
-	WALLevel                string `json:"wal_level"` // "replica" | "logical"
+	WALLevel                string `json:"wal_level"`
 }

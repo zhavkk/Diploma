@@ -60,10 +60,16 @@ services:
       dockerfile: deployments/Dockerfile.node-agent
     environment:
       NODE_ID: "pg-primary"
+      # NODE_ADDR — gRPC-адрес этого node-agent внутри docker-сети.
+      # Оркестратор использует его для вызовов PromoteNode / ReconfigureReplication.
+      NODE_ADDR: "node-agent-primary:50052"
+      ORCHESTRATOR_ADDR: "orchestrator:50051"
+      PG_HOST: "pg-primary"
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
-      ORCHESTRATOR_ADDR: "orchestrator:50051"
+      GRPC_ADDR: ":50052"
+      HEALTH_ADDR: ":8081"
     networks:
       - ha-net
     depends_on:
@@ -95,15 +101,20 @@ services:
       dockerfile: deployments/Dockerfile.node-agent
     environment:
       NODE_ID: "pg-replica1"
+      NODE_ADDR: "node-agent-replica1:50052"
+      ORCHESTRATOR_ADDR: "orchestrator:50051"
+      PG_HOST: "pg-replica1"
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
-      ORCHESTRATOR_ADDR: "orchestrator:50051"
+      GRPC_ADDR: ":50052"
+      HEALTH_ADDR: ":8081"
     networks:
       - ha-net
     depends_on:
       - pg-replica1
     ports:
+      # Внешний порт 8082 → внутренний 8081 (все node-agent слушают :8081)
       - "8082:8081"
 
   # ─────────────────────────────────────────
@@ -130,10 +141,14 @@ services:
       dockerfile: deployments/Dockerfile.node-agent
     environment:
       NODE_ID: "pg-replica2"
+      NODE_ADDR: "node-agent-replica2:50052"
+      ORCHESTRATOR_ADDR: "orchestrator:50051"
+      PG_HOST: "pg-replica2"
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
-      ORCHESTRATOR_ADDR: "orchestrator:50051"
+      GRPC_ADDR: ":50052"
+      HEALTH_ADDR: ":8081"
     networks:
       - ha-net
     depends_on:
@@ -150,6 +165,11 @@ services:
       dockerfile: deployments/Dockerfile.orchestrator
     environment:
       NODE_ID: "orchestrator-1"
+      GRPC_ADDR: ":50051"
+      HTTP_ADDR: ":8080"
+      HEARTBEAT_TIMEOUT: "10"
+      QUORUM_SIZE: "1"
+      ETCD_ENDPOINTS: "etcd:2379"
     networks:
       - ha-net
     depends_on:
@@ -160,6 +180,8 @@ services:
 
   # ─────────────────────────────────────────
   # HAProxy — load balancer
+  # HAProxy находится в той же docker-сети, поэтому health checks обращаются
+  # к service-именам и внутреннему порту 8081 (не к внешним портам хоста).
   # ─────────────────────────────────────────
   haproxy:
     image: haproxy:2.9

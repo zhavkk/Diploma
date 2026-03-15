@@ -6,35 +6,40 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zhavkk/Diploma/pkg/models"
 	"github.com/zhavkk/Diploma/pkg/pgclient"
 )
 
 type Config struct {
 	NodeID       string
+	NodeAddr     string
 	PollInterval int
 }
 
-type ReplicationMetrics struct {
-	NodeID          string
-	ApplicationName string
-	State           string
-	WriteLag        int64
-	FlushLag        int64
-	ReplayLag       int64
-	SlotActive      bool
+type ReplicationStatsSource interface {
+	ReplicationStats(ctx context.Context) ([]pgclient.ReplicationStat, error)
+}
+
+type MetricsSender interface {
+	Send(ctx context.Context, status *models.NodeStatus) error
 }
 
 type Watcher struct {
-	cfg Config
-	pg  *pgclient.Client
-	log *zap.Logger
+	cfg    Config
+	pg     ReplicationStatsSource
+	sender MetricsSender
+	log    *zap.Logger
 }
 
-func New(cfg Config, pg *pgclient.Client, log *zap.Logger) *Watcher {
+func New(cfg Config, pg ReplicationStatsSource, log *zap.Logger) *Watcher {
 	return &Watcher{cfg: cfg, pg: pg, log: log}
 }
 
-func (w *Watcher) Run(ctx context.Context, orchestratorAddr string) {
+func (w *Watcher) WithSender(s MetricsSender) {
+	w.sender = s
+}
+
+func (w *Watcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(w.cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
 
@@ -43,40 +48,43 @@ func (w *Watcher) Run(ctx context.Context, orchestratorAddr string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			metrics, err := w.collect(ctx)
-			if err != nil {
+			if err := w.SendMetrics(ctx); err != nil {
 				w.log.Warn("replication watcher error", zap.Error(err))
-				continue
 			}
-			for _, m := range metrics {
-				w.log.Debug("replication metrics",
-					zap.String("app", m.ApplicationName),
-					zap.String("state", m.State),
-					zap.Int64("write_lag_ms", m.WriteLag),
-					zap.Int64("replay_lag_ms", m.ReplayLag),
-				)
-			}
-			// TODO: gRPC вызов HealthMonitor.ReceiveReplicationMetrics(orchestratorAddr, metrics)
 		}
 	}
 }
 
-func (w *Watcher) collect(ctx context.Context) ([]ReplicationMetrics, error) {
+func (w *Watcher) SendMetrics(ctx context.Context) error {
 	stats, err := w.pg.ReplicationStats(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	result := make([]ReplicationMetrics, 0, len(stats))
-	for _, s := range stats {
-		result = append(result, ReplicationMetrics{
-			NodeID:          w.cfg.NodeID,
-			ApplicationName: s.ApplicationName,
-			State:           s.State,
-			WriteLag:        s.WriteLag,
-			FlushLag:        s.FlushLag,
-			ReplayLag:       s.ReplayLag,
-		})
+	if w.sender == nil || len(stats) == 0 {
+		return nil
 	}
-	return result, nil
+
+	for _, s := range stats {
+		w.log.Debug("replication metrics",
+			zap.String("app", s.ApplicationName),
+			zap.String("state", s.State),
+			zap.Int64("write_lag_ms", s.WriteLag),
+			zap.Int64("replay_lag_ms", s.ReplayLag),
+		)
+		status := &models.NodeStatus{
+			NodeID:         w.cfg.NodeID,
+			Address:        w.cfg.NodeAddr,
+			Role:           models.RolePrimary,
+			State:          models.StateHealthy,
+			ReplicationLag: s.ReplayLag,
+		}
+		if err := w.sender.Send(ctx, status); err != nil {
+			w.log.Warn("send replication metrics failed",
+				zap.String("app", s.ApplicationName),
+				zap.Error(err),
+			)
+		}
+	}
+	return nil
 }

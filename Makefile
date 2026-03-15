@@ -45,11 +45,11 @@ build-cli:
 
 
 proto:
-	@mkdir -p $(PROTO_OUT)
+	@rm -rf $(PROTO_OUT)
 	protoc \
 		--proto_path=$(PROTO_DIR) \
-		--go_out=$(PROTO_OUT) --go_opt=paths=source_relative \
-		--go-grpc_out=$(PROTO_OUT) --go-grpc_opt=paths=source_relative \
+		--go_out=. --go_opt=paths=import --go_opt=module=$(MODULE) \
+		--go-grpc_out=. --go-grpc_opt=paths=import --go-grpc_opt=module=$(MODULE) \
 		$(PROTO_DIR)/orchestrator.proto $(PROTO_DIR)/nodeagent.proto
 	@echo "proto generated → $(PROTO_OUT)/"
 

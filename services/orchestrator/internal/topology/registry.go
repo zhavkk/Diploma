@@ -1,7 +1,10 @@
 package topology
 
 import (
+	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -9,9 +12,15 @@ import (
 )
 
 type Registry struct {
-	mu   sync.RWMutex
-	topo *models.ClusterTopology
-	log  *zap.Logger
+	mu      sync.RWMutex
+	topo    *models.ClusterTopology
+	events  []models.FailoverEvent
+	log     *zap.Logger
+	version atomic.Int64
+}
+
+func (r *Registry) nextVersion() string {
+	return fmt.Sprintf("v%d", r.version.Add(1))
 }
 
 func NewRegistry(log *zap.Logger) *Registry {
@@ -31,6 +40,7 @@ func (r *Registry) Get() *models.ClusterTopology {
 func (r *Registry) Update(topo *models.ClusterTopology) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	topo.Version = r.nextVersion()
 	r.topo = topo
 	r.log.Info("topology updated",
 		zap.String("primary", topo.PrimaryNode),
@@ -53,6 +63,83 @@ func (r *Registry) SetPrimary(nodeID string) {
 	defer r.mu.Unlock()
 	if r.topo != nil {
 		r.topo.PrimaryNode = nodeID
+		r.topo.Version = r.nextVersion()
 		r.log.Info("primary updated", zap.String("node_id", nodeID))
+	}
+}
+
+func (r *Registry) UpsertNode(status models.NodeStatus) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.topo == nil {
+		r.topo = &models.ClusterTopology{UpdatedAt: time.Now()}
+	}
+
+	for i, n := range r.topo.Nodes {
+		if n.NodeID == status.NodeID {
+			r.topo.Nodes[i] = status
+			if status.Role == models.RolePrimary {
+				r.topo.PrimaryNode = status.NodeID
+			}
+			r.topo.UpdatedAt = time.Now()
+			r.topo.Version = r.nextVersion()
+			r.log.Debug("node updated in topology",
+				zap.String("node_id", status.NodeID),
+				zap.String("role", string(status.Role)),
+			)
+			return
+		}
+	}
+
+	r.topo.Nodes = append(r.topo.Nodes, status)
+	if status.Role == models.RolePrimary {
+		r.topo.PrimaryNode = status.NodeID
+	}
+	r.topo.UpdatedAt = time.Now()
+	r.topo.Version = r.nextVersion()
+	r.log.Debug("node added to topology",
+		zap.String("node_id", status.NodeID),
+		zap.String("role", string(status.Role)),
+	)
+}
+
+func (r *Registry) AppendEvent(evt models.FailoverEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, evt)
+	r.log.Info("failover event recorded",
+		zap.String("old_primary", evt.OldPrimary),
+		zap.String("new_primary", evt.NewPrimary),
+		zap.String("reason", evt.Reason),
+		zap.Time("at", evt.OccurredAt),
+	)
+}
+
+func (r *Registry) Events() []models.FailoverEvent {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cp := make([]models.FailoverEvent, len(r.events))
+	copy(cp, r.events)
+	return cp
+}
+
+func (r *Registry) UpdateNodeState(nodeID string, state models.NodeState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.topo == nil {
+		return
+	}
+	for i := range r.topo.Nodes {
+		if r.topo.Nodes[i].NodeID == nodeID {
+			r.topo.Nodes[i].State = state
+			r.topo.UpdatedAt = time.Now()
+			r.topo.Version = r.nextVersion()
+			r.log.Info("node state updated",
+				zap.String("node_id", nodeID),
+				zap.String("state", string(state)),
+			)
+			return
+		}
 	}
 }

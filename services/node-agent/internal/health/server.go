@@ -6,7 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/zhavkk/Diploma/services/node-agent/internal/probe"
+	"github.com/zhavkk/Diploma/pkg/models"
 )
 
 type Config struct {
@@ -14,21 +14,25 @@ type Config struct {
 	NodeID string
 }
 
+type StatusProvider interface {
+	Latest() *models.NodeStatus
+}
+
 type Server struct {
 	cfg   Config
-	probe *probe.Probe
+	probe StatusProvider
 	log   *zap.Logger
 }
 
-func NewServer(cfg Config, p *probe.Probe, log *zap.Logger) *Server {
+func NewServer(cfg Config, p StatusProvider, log *zap.Logger) *Server {
 	return &Server{cfg: cfg, probe: p, log: log}
 }
 
 func (s *Server) Run(ctx context.Context) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health/primary", s.handlePrimary)
-	mux.HandleFunc("/health/replica", s.handleReplica)
-	mux.HandleFunc("/health/alive", s.handleAlive)
+	mux.HandleFunc("/health/primary", s.HandlePrimary)
+	mux.HandleFunc("/health/replica", s.HandleReplica)
+	mux.HandleFunc("/health/alive", s.HandleAlive)
 
 	srv := &http.Server{Addr: s.cfg.Addr, Handler: mux}
 
@@ -43,7 +47,7 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
-func (s *Server) handlePrimary(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) HandlePrimary(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
 	if status == nil || status.IsInRecovery {
 		http.Error(w, "not primary", http.StatusServiceUnavailable)
@@ -53,7 +57,7 @@ func (s *Server) handlePrimary(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("primary"))
 }
 
-func (s *Server) handleReplica(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) HandleReplica(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
 	if status == nil || !status.IsInRecovery {
 		http.Error(w, "not replica", http.StatusServiceUnavailable)
@@ -63,7 +67,7 @@ func (s *Server) handleReplica(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("replica"))
 }
 
-func (s *Server) handleAlive(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) HandleAlive(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
 	if status == nil || !status.PostgresRunning {
 		http.Error(w, "postgres not running", http.StatusServiceUnavailable)

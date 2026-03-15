@@ -5,6 +5,7 @@ package orchestrator.v1;
 option go_package = "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1;orchestratorv1";
 
 // OrchestratorService — gRPC API для управления кластером (SRE Engineer → Orchestrator)
+// и приёма heartbeat от Node Agent.
 service OrchestratorService {
   // Статус кластера
   rpc GetClusterStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
@@ -17,6 +18,9 @@ service OrchestratorService {
 
   // Список узлов кластера
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+
+  // Heartbeat от Node Agent: отправка статуса узла в оркестратор
+  rpc ReportHeartbeat(ReportHeartbeatRequest) returns (ReportHeartbeatResponse);
 }
 
 // --- Cluster Status ---
@@ -71,4 +75,20 @@ message NodeInfo {
   string role      = 3; // "primary" | "replica"
   bool   healthy   = 4;
   int64  wal_lag   = 5; // байты отставания от primary (0 для primary)
+}
+
+// --- Heartbeat (Node Agent → Orchestrator) ---
+
+message ReportHeartbeatRequest {
+  string node_id          = 1;
+  string address          = 2; // gRPC адрес агента (host:port)
+  string role             = 3; // "primary" | "replica"
+  bool   is_in_recovery   = 4;
+  int64  wal_replay_lsn   = 5;
+  int64  replication_lag  = 6;
+  bool   postgres_running = 7;
+}
+
+message ReportHeartbeatResponse {
+  bool ok = 1;
 }
