@@ -1,0 +1,19 @@
+---
+- name: Copy orchestrator binary
+  copy:
+    src: "{{ playbook_dir }}/../../bin/orchestrator"
+    dest: /usr/local/bin/ha-orchestrator
+    mode: '0755'
+
+- name: Create orchestrator systemd unit
+  template:
+    src: orchestrator.service.j2
+    dest: /etc/systemd/system/ha-orchestrator.service
+  notify: restart orchestrator
+
+- name: Enable and start orchestrator
+  systemd:
+    name: ha-orchestrator
+    enabled: true
+    state: started
+    daemon_reload: true
