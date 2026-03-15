@@ -47,7 +47,7 @@ model {
         }
 
         replication_configurator = component 'Replication Configurator' {
-            description 'Конфигурирует параметры streaming replication PostgreSQL'
+            description 'Конфигурирует параметры streaming replication PostgreSQL: synchronous_standby_names, recovery.conf, pg_hba.conf для replication slots'
         }
 
         coordination_module = component 'Distributed Coordination Module' {
@@ -64,18 +64,18 @@ model {
     }
 
     node_agent = system 'Node Agent (per DB node)' {
-        description 'Агент, развернутый на каждом узле БД'
+        description 'Агент, развернутый на каждом узле БД (отдельный экземпляр на primary и каждой реплике). Предоставляет HTTP health endpoint для HAProxy'
 
         db_probe = component 'DB Probe' {
-            description 'Собирает статус БД: role, lag, availability'
+            description 'Собирает статус БД: pg_is_in_recovery(), pg_stat_replication, pg_last_wal_replay_lsn(), role, lag, availability. Отдаёт HTTP /health endpoint'
         }
 
         replication_watcher = component 'Replication Watcher' {
-            description 'Отслеживает состояние streaming replication'
+            description 'Отслеживает состояние streaming replication: write_lag, flush_lag, replay_lag, состояние replication slots'
         }
 
         node_controller = component 'Node Controller' {
-            description 'Выполняет команды: promote, reconfigure, restart'
+            description 'Выполняет команды: promote, pg_rewind (ресинхронизация бывшего primary), reconfigure recovery.conf / postgresql.conf, restart'
         }
     }
 
@@ -87,11 +87,11 @@ model {
         }
 
         pg_replica1 = database 'PostgreSQL Replica 1' {
-            description 'Асинхронная реплика'
+            description 'Синхронная реплика (synchronous_commit = on) — гарантирует zero data loss при failover'
         }
 
         pg_replica2 = database 'PostgreSQL Replica 2' {
-            description 'Асинхронная реплика'
+            description 'Асинхронная реплика — для read-scaling'
         }
     }
 
@@ -106,14 +106,24 @@ model {
     load_balancer -> db_cluster.pg_primary 'Writes'
     load_balancer -> db_cluster.pg_replica1 'Reads'
     load_balancer -> db_cluster.pg_replica2 'Reads'
+    load_balancer -> node_agent.db_probe 'Health check (HTTP /health) — определяет роль узла'
+
+    node_agent.db_probe -> db_cluster.pg_primary 'pg_is_in_recovery(), pg_stat_replication'
+    node_agent.db_probe -> db_cluster.pg_replica1 'pg_last_wal_replay_lsn(), pg_is_in_recovery()'
+    node_agent.db_probe -> db_cluster.pg_replica2 'pg_last_wal_replay_lsn(), pg_is_in_recovery()'
 
     node_agent.db_probe -> HA_orchestrator.health_monitor 'Heartbeat + status'
-    node_agent.replication_watcher -> HA_orchestrator.health_monitor 'Replication metrics'
+    node_agent.replication_watcher -> HA_orchestrator.health_monitor 'Replication metrics (lag, slot state)'
+
+    HA_orchestrator.cluster_control_service -> HA_orchestrator.topology_registry 'Read cluster state (для ответа на API запросы)'
+    HA_orchestrator.cluster_control_service -> HA_orchestrator.replication_configurator 'Trigger reconfig (admin-инициированные изменения)'
+    HA_orchestrator.topology_registry -> HA_orchestrator.cluster_control_service 'Cluster state for status API'
 
     HA_orchestrator.health_monitor -> HA_orchestrator.failover_manager 'Failure detected'
     HA_orchestrator.failover_manager -> HA_orchestrator.coordination_module 'Leader election'
     HA_orchestrator.coordination_module -> etcd 'Distributed lock / election'
     HA_orchestrator.failover_manager -> HA_orchestrator.topology_registry 'Update topology'
+    HA_orchestrator.failover_manager -> HA_orchestrator.replication_configurator 'Reconfigure replication after failover'
     HA_orchestrator.topology_registry -> etcd 'Persist cluster state'
 
     HA_orchestrator.failover_manager -> node_agent.node_controller 'Promote / Reconfigure'
@@ -121,8 +131,8 @@ model {
 
     HA_orchestrator.failover_manager -> load_balancer 'Update routing after failover'
 
-    db_cluster.pg_primary -> db_cluster.pg_replica1 'Streaming Replication'
-    db_cluster.pg_primary -> db_cluster.pg_replica2 'Streaming Replication'
+    db_cluster.pg_primary -> db_cluster.pg_replica1 'Streaming Replication (sync)'
+    db_cluster.pg_primary -> db_cluster.pg_replica2 'Streaming Replication (async)'
 
 
 }

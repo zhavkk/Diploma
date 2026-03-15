@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package nodeagent.v1;
+
+option go_package = "github.com/zhavkk/Diploma/api/proto/gen/nodeagent/v1;nodeagentv1";
+
+// NodeAgentService — gRPC API Node Agent (Orchestrator → Node Agent)
+service NodeAgentService {
+  // Получить текущий статус узла
+  rpc GetNodeStatus(GetNodeStatusRequest) returns (GetNodeStatusResponse);
+
+  // Промоутировать узел в primary (pg_ctl promote)
+  rpc PromoteNode(PromoteNodeRequest) returns (PromoteNodeResponse);
+
+  // Перенастроить репликацию (primary_conninfo, recovery.conf)
+  rpc ReconfigureReplication(ReconfigureReplicationRequest) returns (ReconfigureReplicationResponse);
+
+  // Выполнить pg_rewind для ресинхронизации бывшего primary
+  rpc RunPgRewind(RunPgRewindRequest) returns (RunPgRewindResponse);
+
+  // Перезапустить PostgreSQL
+  rpc RestartPostgres(RestartPostgresRequest) returns (RestartPostgresResponse);
+}
+
+// --- Node Status ---
+
+message GetNodeStatusRequest {}
+
+message GetNodeStatusResponse {
+  NodeStatus status = 1;
+}
+
+message NodeStatus {
+  string node_id           = 1;
+  string role              = 2; // "primary" | "replica"
+  bool   is_in_recovery    = 3; // pg_is_in_recovery()
+  int64  wal_receive_lsn   = 4; // pg_last_wal_receive_lsn()
+  int64  wal_replay_lsn    = 5; // pg_last_wal_replay_lsn()
+  int64  replication_lag   = 6; // байты
+  string pg_version        = 7;
+  bool   postgres_running  = 8;
+}
+
+// --- Promote ---
+
+message PromoteNodeRequest {}
+
+message PromoteNodeResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// --- Reconfigure Replication ---
+
+message ReconfigureReplicationRequest {
+  string primary_conninfo          = 1; // host=... port=... user=replicator
+  string recovery_target_timeline  = 2; // "latest" или конкретный timeline ID
+}
+
+message ReconfigureReplicationResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// --- pg_rewind ---
+
+message RunPgRewindRequest {
+  string source_pgdata   = 1; // путь к PGDATA на source (новом primary)
+  string source_conninfo = 2; // conninfo нового primary
+}
+
+message RunPgRewindResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// --- Restart ---
+
+message RestartPostgresRequest {}
+
+message RestartPostgresResponse {
+  bool   success = 1;
+  string message = 2;
+}
