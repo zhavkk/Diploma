@@ -316,3 +316,125 @@ func TestMonitor_ReceiveHeartbeat_NoopWhenNoRejoinHandler(t *testing.T) {
 	// No WithRejoinHandler call — should not panic
 	m.ReceiveHeartbeat(&models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
 }
+
+// -----------------------------------------
+// TASK-007: Repeated failover prevention
+// -----------------------------------------
+
+func TestMonitor_CheckNodes_DuplicatePrimaryFailureNotSentTwice(t *testing.T) {
+	topo := topology.NewRegistry(zap.NewNop())
+	topo.UpsertNode(models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	clk := newClock(time.Now())
+	fm := &mockFailoverNotifier{}
+	m := monitor.NewMonitorWithClock(monitor.Config{HeartbeatTimeout: 30}, fm, topo, clk, zap.NewNop())
+
+	m.ReceiveHeartbeat(&models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	// Exceed timeout
+	clk.Advance(31 * time.Second)
+
+	// First call should trigger failover
+	m.CheckNodes(context.Background())
+	// Second call with same timed-out primary should NOT trigger another failover
+	m.CheckNodes(context.Background())
+
+	calls := fm.CalledWith()
+	if len(calls) != 1 {
+		t.Errorf("expected exactly 1 NotifyPrimaryFailure call, got %d: %v", len(calls), calls)
+	}
+}
+
+func TestMonitor_CheckNodes_HeartbeatClearsNotifiedPrimary(t *testing.T) {
+	topo := topology.NewRegistry(zap.NewNop())
+	topo.UpsertNode(models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	clk := newClock(time.Now())
+	fm := &mockFailoverNotifier{}
+	m := monitor.NewMonitorWithClock(monitor.Config{HeartbeatTimeout: 30}, fm, topo, clk, zap.NewNop())
+
+	m.ReceiveHeartbeat(&models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	// Exceed timeout, trigger failover
+	clk.Advance(31 * time.Second)
+	m.CheckNodes(context.Background())
+
+	// Fresh heartbeat from the previously-timed-out node clears the notified state
+	m.ReceiveHeartbeat(&models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	// Advance again past timeout
+	clk.Advance(31 * time.Second)
+	m.CheckNodes(context.Background())
+
+	calls := fm.CalledWith()
+	if len(calls) != 2 {
+		t.Errorf("expected 2 NotifyPrimaryFailure calls (cleared by heartbeat), got %d: %v", len(calls), calls)
+	}
+}
+
+// -----------------------------------------
+// TASK-010: Startup grace period
+// -----------------------------------------
+
+func TestMonitor_CheckNodes_GracePeriodSuppressesFailover(t *testing.T) {
+	topo := topology.NewRegistry(zap.NewNop())
+	topo.UpsertNode(models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	startTime := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	clk := newClock(startTime)
+	fm := &mockFailoverNotifier{}
+	m := monitor.NewMonitorWithClock(monitor.Config{HeartbeatTimeout: 10}, fm, topo, clk, zap.NewNop())
+
+	// Send heartbeat at start
+	m.ReceiveHeartbeat(&models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	// Simulate Run() to set startedAt
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so Run() exits
+	m.Run(ctx)
+
+	// Default grace period = 2 * 10s = 20s. Advance 11s (past heartbeat timeout but within grace).
+	clk.Advance(11 * time.Second)
+	m.CheckNodes(context.Background())
+
+	if fm.WasCalled() {
+		t.Error("failover should be suppressed during startup grace period")
+	}
+
+	// Advance past grace period (total 21s from start > 20s grace)
+	clk.Advance(10 * time.Second)
+	m.CheckNodes(context.Background())
+
+	if !fm.WasCalled() {
+		t.Error("failover should trigger after grace period expires")
+	}
+}
+
+func TestMonitor_CheckNodes_CustomGracePeriod(t *testing.T) {
+	topo := topology.NewRegistry(zap.NewNop())
+	topo.UpsertNode(models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	startTime := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	clk := newClock(startTime)
+	fm := &mockFailoverNotifier{}
+	m := monitor.NewMonitorWithClock(monitor.Config{
+		HeartbeatTimeout:   10,
+		StartupGracePeriod: 5 * time.Second,
+	}, fm, topo, clk, zap.NewNop())
+
+	m.ReceiveHeartbeat(&models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.Run(ctx)
+
+	// 4s into grace: heartbeat timed out (>10s not elapsed, but let's exceed it)
+	// Actually we need to exceed heartbeat timeout too.
+	// Advance 11s: past heartbeat timeout (10s) and past custom grace (5s).
+	clk.Advance(11 * time.Second)
+	m.CheckNodes(context.Background())
+
+	if !fm.WasCalled() {
+		t.Error("failover should trigger after custom grace period (5s) with heartbeat timeout (10s) exceeded")
+	}
+}

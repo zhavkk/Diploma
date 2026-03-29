@@ -1,0 +1,39 @@
+global
+    log stdout format raw local0
+    maxconn 10000
+
+defaults
+    log     global
+    mode    tcp
+    timeout connect 5s
+    timeout client  30s
+    timeout server  30s
+
+listen stats
+    bind *:{{ hostvars['haproxy']['stats_port'] }}
+    mode http
+    stats enable
+    stats uri /
+    stats refresh 5s
+
+listen pg_primary
+    bind *:{{ hostvars['haproxy']['write_port'] }}
+    mode tcp
+    option httpchk GET /health/primary
+    http-check expect status 200
+{% for host in groups['pg_nodes'] %}
+    server {{ host }}   {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['pg_port'] }}   check addr {{ hostvars[host]['ansible_host'] }} port {{ hostvars[host]['node_agent_http_port'] }} inter 2s fall 2 rise 1{% if not loop.first %} backup{% endif %}
+
+{% endfor %}
+
+listen pg_replicas
+    bind *:{{ hostvars['haproxy']['read_port'] }}
+    mode tcp
+    balance roundrobin
+    option httpchk GET /health/replica
+    http-check expect status 200
+{% for host in groups['pg_nodes'] | select('ne', 'pg-primary') %}
+    server {{ host }}   {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['pg_port'] }}   check addr {{ hostvars[host]['ansible_host'] }} port {{ hostvars[host]['node_agent_http_port'] }} inter 2s fall 2 rise 1
+
+{% endfor %}
+    server pg-primary   {{ hostvars['pg-primary']['ansible_host'] }}:{{ hostvars['pg-primary']['pg_port'] }}   check addr {{ hostvars['pg-primary']['ansible_host'] }} port {{ hostvars['pg-primary']['node_agent_http_port'] }} inter 2s fall 2 rise 1 backup

@@ -75,6 +75,36 @@ func TestNodeAgentConfig_ReadsFromEnv(t *testing.T) {
 	}
 }
 
+func TestNodeAgentConfig_ErrorWhenPollIntervalZero(t *testing.T) {
+	t.Setenv("NODE_ID", "pg-primary")
+	t.Setenv("NODE_ADDR", "pg-primary:50052")
+	t.Setenv("ORCHESTRATOR_ADDR", "orchestrator:50051")
+	t.Setenv("PGDATA", "/var/lib/postgresql/data")
+	t.Setenv("PG_USER", "postgres")
+	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("POLL_INTERVAL", "0")
+
+	_, err := config.LoadNodeAgent()
+	if err == nil {
+		t.Error("expected error when POLL_INTERVAL=0")
+	}
+}
+
+func TestNodeAgentConfig_ErrorWhenPGPortInvalid(t *testing.T) {
+	t.Setenv("NODE_ID", "pg-primary")
+	t.Setenv("NODE_ADDR", "pg-primary:50052")
+	t.Setenv("ORCHESTRATOR_ADDR", "orchestrator:50051")
+	t.Setenv("PGDATA", "/var/lib/postgresql/data")
+	t.Setenv("PG_USER", "postgres")
+	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("PG_PORT", "99999")
+
+	_, err := config.LoadNodeAgent()
+	if err == nil {
+		t.Error("expected error when PG_PORT=99999 (out of range)")
+	}
+}
+
 func TestNodeAgentConfig_ErrorOnMissingRequired(t *testing.T) {
 	cases := []struct {
 		name    string

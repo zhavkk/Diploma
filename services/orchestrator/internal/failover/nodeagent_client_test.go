@@ -20,10 +20,11 @@ const callerBufSize = 1024 * 1024
 // failingNodeAgentServer — фиктивный gRPC-сервер, возвращающий ошибку первые N раз.
 type failingNodeAgentServer struct {
 	nodeagentv1.UnimplementedNodeAgentServiceServer
-	failCount      int32 // сколько раз ещё вернуть ошибку
-	promoteHits    atomic.Int32
-	reconfigHits   atomic.Int32
-	pgRewindHits   atomic.Int32
+	failCount    int32 // сколько раз ещё вернуть ошибку
+	promoteHits  atomic.Int32
+	reconfigHits atomic.Int32
+	pgRewindHits atomic.Int32
+	restartHits  atomic.Int32
 }
 
 func (s *failingNodeAgentServer) PromoteNode(_ context.Context, _ *nodeagentv1.PromoteNodeRequest) (*nodeagentv1.PromoteNodeResponse, error) {
@@ -51,6 +52,15 @@ func (s *failingNodeAgentServer) RunPgRewind(_ context.Context, _ *nodeagentv1.R
 		return nil, errors.New("transient error")
 	}
 	return &nodeagentv1.RunPgRewindResponse{Success: true}, nil
+}
+
+func (s *failingNodeAgentServer) RestartPostgres(_ context.Context, _ *nodeagentv1.RestartPostgresRequest) (*nodeagentv1.RestartPostgresResponse, error) {
+	s.restartHits.Add(1)
+	if s.failCount > 0 {
+		s.failCount--
+		return nil, errors.New("transient error")
+	}
+	return &nodeagentv1.RestartPostgresResponse{Success: true}, nil
 }
 
 func newCallerTestServer(t *testing.T, srv nodeagentv1.NodeAgentServiceServer) (caller *failover.GRPCNodeAgentCaller, cleanup func()) {
@@ -152,5 +162,39 @@ func TestGRPCCaller_RunPgRewind_SucceedsOnFirstAttempt(t *testing.T) {
 	}
 	if srv.pgRewindHits.Load() != 1 {
 		t.Errorf("expected exactly 1 call on success, got %d", srv.pgRewindHits.Load())
+	}
+}
+
+// -----------------------------------------
+// RestartPostgres
+// -----------------------------------------
+
+func TestGRPCCaller_RestartPostgres_RetriesOnTransientError(t *testing.T) {
+	srv := &failingNodeAgentServer{failCount: 2}
+	caller, cleanup := newCallerTestServer(t, srv)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := caller.RestartPostgres(ctx, "passthrough://bufnet"); err != nil {
+		t.Fatalf("RestartPostgres failed after retries: %v", err)
+	}
+	if srv.restartHits.Load() < 3 {
+		t.Errorf("expected at least 3 RestartPostgres calls, got %d", srv.restartHits.Load())
+	}
+}
+
+func TestGRPCCaller_RestartPostgres_SucceedsOnFirstAttempt(t *testing.T) {
+	srv := &failingNodeAgentServer{failCount: 0}
+	caller, cleanup := newCallerTestServer(t, srv)
+	defer cleanup()
+
+	ctx := context.Background()
+	if err := caller.RestartPostgres(ctx, "passthrough://bufnet"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if srv.restartHits.Load() != 1 {
+		t.Errorf("expected exactly 1 call on success, got %d", srv.restartHits.Load())
 	}
 }

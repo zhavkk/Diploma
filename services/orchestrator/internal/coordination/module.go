@@ -3,6 +3,7 @@ package coordination
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -17,18 +18,20 @@ type Config struct {
 	NodeID        string
 
 	EtcdDialTimeout time.Duration
+	BackoffMin      time.Duration // defaults to 5s; set low in tests
 }
 
 type EtcdBackend interface {
 	Put(ctx context.Context, key, value string) error
 	Get(ctx context.Context, key string) (string, error)
-	Campaign(ctx context.Context, key, val string) (resign func(context.Context) error, err error)
+	Campaign(ctx context.Context, key, val string) (resign func(context.Context) error, sessionDone <-chan struct{}, err error)
 }
 
 type Module struct {
-	cfg     Config
-	backend EtcdBackend
-	log     *zap.Logger
+	cfg          Config
+	backend      EtcdBackend
+	log          *zap.Logger
+	leaderStatus atomic.Bool
 }
 
 func NewModule(cfg Config, log *zap.Logger) (*Module, error) {
@@ -51,25 +54,58 @@ func NewModuleWithBackend(cfg Config, backend EtcdBackend, log *zap.Logger) *Mod
 }
 
 func (m *Module) Run(ctx context.Context) {
-	m.log.Info("starting leader election campaign", zap.String("node_id", m.cfg.NodeID))
-	resign, err := m.backend.Campaign(ctx, "/ha-orchestrator/leader", m.cfg.NodeID)
-	if err != nil {
-		m.log.Error("leader election failed", zap.Error(err))
-		return
+	minBackoff := m.cfg.BackoffMin
+	if minBackoff == 0 {
+		minBackoff = 5 * time.Second
 	}
-	m.log.Info("became leader", zap.String("node_id", m.cfg.NodeID))
-	<-ctx.Done()
-	if resign != nil {
-		_ = resign(context.Background())
+	const maxBackoff = 30 * time.Second
+	backoff := minBackoff
+
+	for {
+		m.log.Info("starting leader election campaign", zap.String("node_id", m.cfg.NodeID))
+		resign, sessionDone, err := m.backend.Campaign(ctx, "/ha-orchestrator/leader", m.cfg.NodeID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			m.log.Error("leader election failed, retrying",
+				zap.Error(err),
+				zap.Duration("backoff", backoff),
+			)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+		backoff = minBackoff
+		m.leaderStatus.Store(true)
+		m.log.Info("became leader", zap.String("node_id", m.cfg.NodeID))
+
+		select {
+		case <-ctx.Done():
+			if resign != nil {
+				_ = resign(context.Background())
+			}
+			return
+		case <-sessionDone:
+			m.leaderStatus.Store(false)
+			m.log.Warn("etcd session expired, re-campaigning", zap.String("node_id", m.cfg.NodeID))
+			if resign != nil {
+				_ = resign(context.Background())
+			}
+			// loop back to re-campaign
+		}
 	}
 }
 
-func (m *Module) IsLeader(ctx context.Context) (bool, error) {
-	val, err := m.backend.Get(ctx, "/ha-orchestrator/leader")
-	if err != nil {
-		return false, err
-	}
-	return val == m.cfg.NodeID, nil
+func (m *Module) IsLeader(_ context.Context) (bool, error) {
+	return m.leaderStatus.Load(), nil
 }
 
 func (m *Module) PutClusterState(ctx context.Context, key, value string) error {
@@ -98,12 +134,13 @@ func (a *etcdBackendAdapter) Get(ctx context.Context, key string) (string, error
 	return a.cli.Get(ctx, key)
 }
 
-func (a *etcdBackendAdapter) Campaign(ctx context.Context, key, val string) (func(context.Context) error, error) {
-	election, err := a.cli.Campaign(ctx, key, val)
+func (a *etcdBackendAdapter) Campaign(ctx context.Context, key, val string) (func(context.Context) error, <-chan struct{}, error) {
+	handle, err := a.cli.Campaign(ctx, key, val)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return func(ctx context.Context) error {
-		return a.cli.Resign(ctx, election)
-	}, nil
+	resignFn := func(ctx context.Context) error {
+		return a.cli.Resign(ctx, handle)
+	}
+	return resignFn, handle.SessionDone(), nil
 }

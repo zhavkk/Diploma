@@ -3,6 +3,7 @@ package replication_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -289,5 +290,55 @@ func TestConfigurator_ReconfigureAfterFailover_CollectsAllErrors(t *testing.T) {
 	// Продолжает обработку даже после первой ошибки (не fail-fast).
 	if len(caller.calls) != 2 {
 		t.Errorf("expected 2 reconfig attempts (both replicas), got %d", len(caller.calls))
+	}
+}
+
+func TestConfigurator_PrimaryConnInfo_UsesConfiguredPort(t *testing.T) {
+	c := replication.NewConfiguratorWithConfig(replication.Config{
+		ReplicationPassword: "secret",
+		SSLMode:             "disable",
+		PGPort:              5433,
+	}, nil, nil, zap.NewNop())
+	got := c.PrimaryConnInfo("host:50052")
+	if !strings.Contains(got, "port=5433") {
+		t.Errorf("PrimaryConnInfo = %q, expected port=5433", got)
+	}
+}
+
+func TestConfigurator_PrimaryConnInfo_UsesConfiguredUser(t *testing.T) {
+	c := replication.NewConfiguratorWithConfig(replication.Config{
+		ReplicationUser:     "custom_user",
+		ReplicationPassword: "secret",
+		SSLMode:             "disable",
+		PGPort:              5432,
+	}, nil, nil, zap.NewNop())
+	got := c.PrimaryConnInfo("pg-primary:50052")
+	if !strings.Contains(got, "user=custom_user") {
+		t.Errorf("PrimaryConnInfo = %q, expected user=custom_user", got)
+	}
+}
+
+func TestConfigurator_PrimaryConnInfo_DefaultUserIsReplicator(t *testing.T) {
+	c := replication.NewConfiguratorWithConfig(replication.Config{
+		ReplicationPassword: "secret",
+		SSLMode:             "disable",
+		PGPort:              5432,
+	}, nil, nil, zap.NewNop())
+	got := c.PrimaryConnInfo("pg-primary:50052")
+	if !strings.Contains(got, "user=replicator") {
+		t.Errorf("PrimaryConnInfo = %q, expected user=replicator (default)", got)
+	}
+}
+
+func TestConfigurator_PrimaryConnInfo_PasswordWithSpecialChars(t *testing.T) {
+	c := replication.NewConfiguratorWithConfig(replication.Config{
+		ReplicationPassword: "p@ss'w\\rd",
+		SSLMode:             "disable",
+		PGPort:              5432,
+	}, nil, nil, zap.NewNop())
+	got := c.PrimaryConnInfo("pg-primary:50052")
+	// Password must be single-quoted with escaping
+	if !strings.Contains(got, `password='p@ss\'w\\rd'`) {
+		t.Errorf("PrimaryConnInfo = %q, expected quoted password", got)
 	}
 }

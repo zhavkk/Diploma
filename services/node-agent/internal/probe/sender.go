@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -19,6 +20,8 @@ type HeartbeatSender interface {
 type GRPCSender struct {
 	orchestratorAddr string
 	dialFn           func(ctx context.Context, addr string) (net.Conn, error)
+	mu               sync.Mutex
+	conn             *grpc.ClientConn
 }
 
 func NewGRPCSender(orchestratorAddr string) *GRPCSender {
@@ -37,12 +40,34 @@ func (s *GRPCSender) dial() (*grpc.ClientConn, error) {
 	return grpc.NewClient(s.orchestratorAddr, opts...)
 }
 
-func (s *GRPCSender) Send(ctx context.Context, status *models.NodeStatus) error {
+func (s *GRPCSender) getConn() (*grpc.ClientConn, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		return s.conn, nil
+	}
 	conn, err := s.dial()
+	if err != nil {
+		return nil, err
+	}
+	s.conn = conn
+	return s.conn, nil
+}
+
+func (s *GRPCSender) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return nil
+}
+
+func (s *GRPCSender) Send(ctx context.Context, status *models.NodeStatus) error {
+	conn, err := s.getConn()
 	if err != nil {
 		return fmt.Errorf("heartbeat sender dial: %w", err)
 	}
-	defer conn.Close()
 
 	_, err = orchestratorv1.NewOrchestratorServiceClient(conn).ReportHeartbeat(ctx, &orchestratorv1.ReportHeartbeatRequest{
 		NodeId:          status.NodeID,

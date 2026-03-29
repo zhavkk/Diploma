@@ -2,10 +2,12 @@ package probe_test
 
 import (
 	"context"
+	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -15,29 +17,40 @@ import (
 )
 
 // ─────────────────────────────────────────
-// Минимальный mock оркестратора (только ReportHeartbeat)
+// Mock orchestrator gRPC server
 // ─────────────────────────────────────────
 
 type mockOrchestratorServer struct {
 	orchestratorv1.UnimplementedOrchestratorServiceServer
-	received *orchestratorv1.ReportHeartbeatRequest
+	hits    atomic.Int32
+	lastReq atomic.Value // *orchestratorv1.ReportHeartbeatRequest
+	failErr error
 }
 
 func (s *mockOrchestratorServer) ReportHeartbeat(_ context.Context, req *orchestratorv1.ReportHeartbeatRequest) (*orchestratorv1.ReportHeartbeatResponse, error) {
-	s.received = req
+	s.hits.Add(1)
+	s.lastReq.Store(req)
+	if s.failErr != nil {
+		return nil, s.failErr
+	}
 	return &orchestratorv1.ReportHeartbeatResponse{Ok: true}, nil
 }
 
-func setupMockOrchestrator(t *testing.T, srv *mockOrchestratorServer) func(ctx context.Context, addr string) (net.Conn, error) {
+func newSenderTestServer(t *testing.T, srv orchestratorv1.OrchestratorServiceServer) (sender *probe.GRPCSender, cleanup func()) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	grpcSrv := grpc.NewServer()
 	orchestratorv1.RegisterOrchestratorServiceServer(grpcSrv, srv)
 	go grpcSrv.Serve(lis) //nolint:errcheck
-	t.Cleanup(grpcSrv.Stop)
 
-	return func(_ context.Context, _ string) (net.Conn, error) {
-		return lis.Dial()
+	dialFn := func(ctx context.Context, _ string) (net.Conn, error) {
+		return lis.DialContext(ctx)
+	}
+	s := probe.NewGRPCSenderWithDialer(dialFn, "passthrough://bufnet")
+	return s, func() {
+		s.Close()
+		grpcSrv.Stop()
+		lis.Close()
 	}
 }
 
@@ -45,83 +58,130 @@ func setupMockOrchestrator(t *testing.T, srv *mockOrchestratorServer) func(ctx c
 // GRPCSender тесты
 // ─────────────────────────────────────────
 
-func TestGRPCSender_SendsHeartbeat(t *testing.T) {
+func TestGRPCSender_Send_Success(t *testing.T) {
 	srv := &mockOrchestratorServer{}
-	dialFn := setupMockOrchestrator(t, srv)
-	sender := probe.NewGRPCSenderWithDialer(dialFn, "passthrough://bufnet")
+	sender, cleanup := newSenderTestServer(t, srv)
+	defer cleanup()
 
 	status := &models.NodeStatus{
 		NodeID:          "pg-replica1",
-		Address:         "pg-replica1:50052",
+		Address:         "replica1:50052",
 		Role:            models.RoleReplica,
 		IsInRecovery:    true,
 		WALReplayLSN:    9000,
-		ReplicationLag:  15,
+		ReplicationLag:  1000,
 		PostgresRunning: true,
 	}
 
-	if err := sender.Send(context.Background(), status); err != nil {
-		t.Fatalf("Send: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := sender.Send(ctx, status); err != nil {
+		t.Fatalf("Send failed: %v", err)
 	}
-	if srv.received == nil {
-		t.Fatal("expected ReportHeartbeat to be called")
+
+	if srv.hits.Load() != 1 {
+		t.Errorf("expected 1 ReportHeartbeat call, got %d", srv.hits.Load())
 	}
-	if srv.received.NodeId != "pg-replica1" {
-		t.Errorf("NodeId = %q, want %q", srv.received.NodeId, "pg-replica1")
+
+	got, ok := srv.lastReq.Load().(*orchestratorv1.ReportHeartbeatRequest)
+	if !ok || got == nil {
+		t.Fatal("expected lastReq to be stored")
 	}
-	if srv.received.WalReplayLsn != 9000 {
-		t.Errorf("WalReplayLsn = %d, want 9000", srv.received.WalReplayLsn)
+	if got.NodeId != "pg-replica1" {
+		t.Errorf("NodeId = %q, want %q", got.NodeId, "pg-replica1")
 	}
-	if !srv.received.IsInRecovery {
-		t.Error("IsInRecovery should be true for replica")
+	if got.Role != string(models.RoleReplica) {
+		t.Errorf("Role = %q, want %q", got.Role, string(models.RoleReplica))
+	}
+	if got.WalReplayLsn != 9000 {
+		t.Errorf("WalReplayLsn = %d, want 9000", got.WalReplayLsn)
+	}
+	if got.ReplicationLag != 1000 {
+		t.Errorf("ReplicationLag = %d, want 1000", got.ReplicationLag)
+	}
+	if !got.IsInRecovery {
+		t.Error("expected IsInRecovery=true")
+	}
+	if !got.PostgresRunning {
+		t.Error("expected PostgresRunning=true")
 	}
 }
 
-func TestGRPCSender_SendsAllFields(t *testing.T) {
+func TestGRPCSender_Send_ReuseConnection(t *testing.T) {
 	srv := &mockOrchestratorServer{}
-	dialFn := setupMockOrchestrator(t, srv)
-	sender := probe.NewGRPCSenderWithDialer(dialFn, "passthrough://bufnet")
+	sender, cleanup := newSenderTestServer(t, srv)
+	defer cleanup()
 
 	status := &models.NodeStatus{
 		NodeID:          "pg-primary",
-		Address:         "pg-primary:50052",
+		Address:         "primary:50052",
 		Role:            models.RolePrimary,
-		IsInRecovery:    false,
-		WALReplayLSN:    50000,
-		ReplicationLag:  0,
 		PostgresRunning: true,
 	}
 
-	_ = sender.Send(context.Background(), status)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	if srv.received.Role != "primary" {
-		t.Errorf("Role = %q, want %q", srv.received.Role, "primary")
+	for i := 0; i < 3; i++ {
+		if err := sender.Send(ctx, status); err != nil {
+			t.Fatalf("Send #%d failed: %v", i+1, err)
+		}
 	}
-	if srv.received.PostgresRunning != true {
-		t.Error("PostgresRunning should be true")
-	}
-	if srv.received.ReplicationLag != 0 {
-		t.Errorf("ReplicationLag = %d, want 0 for primary", srv.received.ReplicationLag)
+
+	if srv.hits.Load() != 3 {
+		t.Errorf("expected 3 ReportHeartbeat calls, got %d", srv.hits.Load())
 	}
 }
 
-// ─────────────────────────────────────────
-// Probe интеграционный тест: вызывает sender после collect
-// (используем mock sender без реального PostgreSQL)
-// ─────────────────────────────────────────
+func TestGRPCSender_Close_Idempotent(t *testing.T) {
+	srv := &mockOrchestratorServer{}
+	sender, cleanup := newSenderTestServer(t, srv)
+	defer cleanup()
 
-type mockSender struct {
-	sent []*models.NodeStatus
+	// Send once to establish connection.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	status := &models.NodeStatus{
+		NodeID:          "pg-primary",
+		Address:         "primary:50052",
+		Role:            models.RolePrimary,
+		PostgresRunning: true,
+	}
+	if err := sender.Send(ctx, status); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	// Close twice — must not panic.
+	if err := sender.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	// Second Close should be safe (conn already nil or closed).
+	sender.Close()
 }
 
-func (m *mockSender) Send(_ context.Context, s *models.NodeStatus) error {
-	m.sent = append(m.sent, s)
-	return nil
-}
+func TestGRPCSender_Send_PropagatesError(t *testing.T) {
+	srv := &mockOrchestratorServer{failErr: errors.New("internal error")}
+	sender, cleanup := newSenderTestServer(t, srv)
+	defer cleanup()
 
-func TestProbe_Latest_NilBeforeFirstCollect(t *testing.T) {
-	p := probe.New(probe.Config{NodeID: "test-node", NodeAddr: "node:50052", PollInterval: 1}, nil, zap.NewNop())
-	if p.Latest() != nil {
-		t.Error("Latest() should be nil before first collect")
+	status := &models.NodeStatus{
+		NodeID:          "pg-primary",
+		Address:         "primary:50052",
+		Role:            models.RolePrimary,
+		PostgresRunning: true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := sender.Send(ctx, status)
+	if err == nil {
+		t.Fatal("expected error from Send when server returns error")
+	}
+
+	if srv.hits.Load() != 1 {
+		t.Errorf("expected 1 ReportHeartbeat call even on error, got %d", srv.hits.Load())
 	}
 }

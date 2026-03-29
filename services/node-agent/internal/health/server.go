@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
 	"github.com/zhavkk/Diploma/pkg/models"
@@ -33,6 +34,7 @@ func (s *Server) Run(ctx context.Context) {
 	mux.HandleFunc("/health/primary", s.HandlePrimary)
 	mux.HandleFunc("/health/replica", s.HandleReplica)
 	mux.HandleFunc("/health/alive", s.HandleAlive)
+	mux.Handle("/metrics", promhttp.Handler())
 
 	srv := &http.Server{Addr: s.cfg.Addr, Handler: mux}
 
@@ -49,7 +51,7 @@ func (s *Server) Run(ctx context.Context) {
 
 func (s *Server) HandlePrimary(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
-	if status == nil || status.IsInRecovery {
+	if status == nil || !status.PostgresRunning || status.IsInRecovery {
 		http.Error(w, "not primary", http.StatusServiceUnavailable)
 		return
 	}
@@ -59,7 +61,7 @@ func (s *Server) HandlePrimary(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) HandleReplica(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
-	if status == nil || !status.IsInRecovery {
+	if status == nil || !status.PostgresRunning || !status.IsInRecovery {
 		http.Error(w, "not replica", http.StatusServiceUnavailable)
 		return
 	}

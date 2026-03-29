@@ -11,6 +11,8 @@ import (
 	"github.com/zhavkk/Diploma/pkg/models"
 )
 
+// Registry is the in-memory store for cluster topology and failover events.
+// It is safe for concurrent use.
 type Registry struct {
 	mu      sync.RWMutex
 	topo    *models.ClusterTopology
@@ -23,20 +25,25 @@ func (r *Registry) nextVersion() string {
 	return fmt.Sprintf("v%d", r.version.Add(1))
 }
 
+// NewRegistry creates a new empty topology registry.
 func NewRegistry(log *zap.Logger) *Registry {
 	return &Registry{log: log}
 }
 
+// Get returns a deep copy of the current cluster topology, or nil if not yet initialized.
 func (r *Registry) Get() *models.ClusterTopology {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.topo == nil {
 		return nil
 	}
-	copy := *r.topo
-	return &copy
+	cp := *r.topo
+	cp.Nodes = make([]models.NodeStatus, len(r.topo.Nodes))
+	copy(cp.Nodes, r.topo.Nodes)
+	return &cp
 }
 
+// Update replaces the entire cluster topology and increments the version.
 func (r *Registry) Update(topo *models.ClusterTopology) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -49,6 +56,7 @@ func (r *Registry) Update(topo *models.ClusterTopology) {
 	)
 }
 
+// Primary returns the node ID of the current primary, or an empty string if unknown.
 func (r *Registry) Primary() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -58,6 +66,7 @@ func (r *Registry) Primary() string {
 	return r.topo.PrimaryNode
 }
 
+// SetPrimary updates the primary node ID in the topology.
 func (r *Registry) SetPrimary(nodeID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -68,6 +77,7 @@ func (r *Registry) SetPrimary(nodeID string) {
 	}
 }
 
+// UpsertNode inserts or updates a node's status in the topology.
 func (r *Registry) UpsertNode(status models.NodeStatus) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -79,7 +89,7 @@ func (r *Registry) UpsertNode(status models.NodeStatus) {
 	for i, n := range r.topo.Nodes {
 		if n.NodeID == status.NodeID {
 			r.topo.Nodes[i] = status
-			if status.Role == models.RolePrimary {
+			if status.Role == models.RolePrimary && r.topo.PrimaryNode == "" {
 				r.topo.PrimaryNode = status.NodeID
 			}
 			r.topo.UpdatedAt = time.Now()
@@ -93,7 +103,7 @@ func (r *Registry) UpsertNode(status models.NodeStatus) {
 	}
 
 	r.topo.Nodes = append(r.topo.Nodes, status)
-	if status.Role == models.RolePrimary {
+	if status.Role == models.RolePrimary && r.topo.PrimaryNode == "" {
 		r.topo.PrimaryNode = status.NodeID
 	}
 	r.topo.UpdatedAt = time.Now()
@@ -104,10 +114,16 @@ func (r *Registry) UpsertNode(status models.NodeStatus) {
 	)
 }
 
+const maxEvents = 1000
+
+// AppendEvent records a failover event, retaining at most the last 1000 events.
 func (r *Registry) AppendEvent(evt models.FailoverEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, evt)
+	if len(r.events) > maxEvents {
+		r.events = r.events[len(r.events)-maxEvents:]
+	}
 	r.log.Info("failover event recorded",
 		zap.String("old_primary", evt.OldPrimary),
 		zap.String("new_primary", evt.NewPrimary),
@@ -116,6 +132,7 @@ func (r *Registry) AppendEvent(evt models.FailoverEvent) {
 	)
 }
 
+// Events returns a copy of all recorded failover events.
 func (r *Registry) Events() []models.FailoverEvent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -124,6 +141,7 @@ func (r *Registry) Events() []models.FailoverEvent {
 	return cp
 }
 
+// UpdateNodeState changes the state of a specific node in the topology.
 func (r *Registry) UpdateNodeState(nodeID string, state models.NodeState) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

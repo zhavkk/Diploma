@@ -8,9 +8,15 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zhavkk/Diploma/pkg/metrics"
 	"github.com/zhavkk/Diploma/pkg/models"
-	"github.com/zhavkk/Diploma/services/orchestrator/internal/replication"
 )
+
+// ReplicationConfigurator reconfigures replication on cluster nodes after a failover.
+type ReplicationConfigurator interface {
+	ReconfigureAfterFailover(ctx context.Context, newPrimaryNodeID string) error
+	PrimaryConnInfo(addr string) string
+}
 
 type Config struct {
 	QuorumSize int
@@ -24,6 +30,7 @@ type TopologyRegistry interface {
 
 type CoordinationModule interface {
 	IsLeader(ctx context.Context) (bool, error)
+	PutClusterState(ctx context.Context, key, value string) error
 }
 
 type EventAppender interface {
@@ -34,13 +41,14 @@ type Manager struct {
 	cfg        Config
 	topo       TopologyRegistry
 	coord      CoordinationModule
-	replConf   *replication.Configurator
+	replConf   ReplicationConfigurator
 	caller     NodeAgentCaller
 	eventStore EventAppender
 	log        *zap.Logger
 
 	mu                 sync.Mutex
 	failoverInProgress bool
+	rewindInProgress   bool
 
 	oldPrimaryID       string
 	newPrimaryConnInfo string
@@ -50,7 +58,7 @@ func NewManager(
 	cfg Config,
 	topo TopologyRegistry,
 	coord CoordinationModule,
-	rc *replication.Configurator,
+	rc ReplicationConfigurator,
 	caller NodeAgentCaller,
 	log *zap.Logger,
 ) *Manager {
@@ -88,7 +96,11 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	m.failoverInProgress = true
 	m.mu.Unlock()
 
+	start := time.Now()
+	result := "error"
 	defer func() {
+		metrics.FailoverTotal.WithLabelValues("automatic", result).Inc()
+		metrics.FailoverDurationSeconds.Observe(time.Since(start).Seconds())
 		m.mu.Lock()
 		m.failoverInProgress = false
 		m.mu.Unlock()
@@ -97,8 +109,12 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	m.log.Info("starting failover", zap.String("failed_primary", failedNodeID))
 
 	isLeader, err := m.coord.IsLeader(ctx)
-	if err != nil || !isLeader {
-		m.log.Warn("not the leader, aborting failover", zap.Error(err))
+	if err != nil {
+		m.log.Warn("coordinator check failed, aborting failover", zap.Error(err))
+		return
+	}
+	if !isLeader {
+		m.log.Warn("not the leader, aborting failover")
 		return
 	}
 
@@ -121,31 +137,6 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 
 	m.log.Info("elected new primary", zap.String("node", newPrimary))
 
-	if m.caller != nil {
-		var addr string
-		if topo := m.topo.Get(); topo != nil {
-			for _, n := range topo.Nodes {
-				if n.NodeID == newPrimary {
-					addr = n.Address
-					break
-				}
-			}
-		}
-		if addr != "" {
-			if err := m.caller.PromoteNode(ctx, addr); err != nil {
-				m.log.Error("PromoteNode failed, continuing failover", zap.Error(err))
-			}
-		} else {
-			m.log.Warn("new primary has no address, skipping PromoteNode", zap.String("node", newPrimary))
-		}
-	}
-
-	if err := m.replConf.ReconfigureAfterFailover(ctx, newPrimary); err != nil {
-		m.log.Error("replication reconfiguration failed", zap.Error(err))
-	}
-
-	m.topo.SetPrimary(newPrimary)
-
 	var newPrimaryAddr string
 	if topo := m.topo.Get(); topo != nil {
 		for _, n := range topo.Nodes {
@@ -155,11 +146,40 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 			}
 		}
 	}
-	m.mu.Lock()
-	m.oldPrimaryID = failedNodeID
-	m.newPrimaryConnInfo = fmt.Sprintf("host=%s user=replicator application_name=%s", newPrimaryAddr, failedNodeID)
-	m.mu.Unlock()
 
+	if m.caller != nil {
+		if newPrimaryAddr != "" {
+			if err := m.caller.PromoteNode(ctx, newPrimaryAddr); err != nil {
+				m.log.Error("PromoteNode failed, continuing failover", zap.Error(err))
+			}
+		} else {
+			m.log.Warn("new primary has no address, skipping PromoteNode", zap.String("node", newPrimary))
+		}
+	}
+
+	m.topo.SetPrimary(newPrimary)
+
+	if err := m.coord.PutClusterState(ctx, "primary", newPrimary); err != nil {
+		m.log.Warn("failed to persist primary to etcd", zap.Error(err))
+	}
+
+	if err := m.replConf.ReconfigureAfterFailover(ctx, newPrimary); err != nil {
+		m.log.Error("replication reconfiguration failed", zap.Error(err))
+	}
+
+	if newPrimaryAddr != "" {
+		m.mu.Lock()
+		m.oldPrimaryID = failedNodeID
+		m.newPrimaryConnInfo = m.replConf.PrimaryConnInfo(newPrimaryAddr)
+		m.mu.Unlock()
+	} else {
+		m.log.Warn("new primary address unknown, old primary cannot be auto-rewound",
+			zap.String("old_primary", failedNodeID),
+			zap.String("new_primary", newPrimary),
+		)
+	}
+
+	result = "success"
 	now := time.Now()
 	m.log.Info("failover completed",
 		zap.String("old_primary", failedNodeID),
@@ -176,6 +196,12 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	}
 }
 
+func (m *Manager) NeedsRejoin(nodeID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.oldPrimaryID == nodeID && !m.rewindInProgress
+}
+
 func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr string) error {
 	m.mu.Lock()
 	if m.oldPrimaryID != nodeID {
@@ -183,10 +209,14 @@ func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr s
 		return nil
 	}
 	connInfo := m.newPrimaryConnInfo
-
-	m.oldPrimaryID = ""
-	m.newPrimaryConnInfo = ""
+	m.rewindInProgress = true
 	m.mu.Unlock()
+
+	defer func() {
+		m.mu.Lock()
+		m.rewindInProgress = false
+		m.mu.Unlock()
+	}()
 
 	m.log.Info("old primary rejoining, running pg_rewind",
 		zap.String("node", nodeID),
@@ -199,7 +229,23 @@ func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr s
 	if err := m.caller.RunPgRewind(ctx, nodeAddr, connInfo); err != nil {
 		return fmt.Errorf("pg_rewind for %s: %w", nodeID, err)
 	}
-	m.log.Info("pg_rewind completed, node can rejoin as replica", zap.String("node", nodeID))
+
+	// Reconfigure the old primary as a replica of the new primary.
+	if err := m.caller.ReconfigureReplication(ctx, nodeAddr, connInfo, "latest"); err != nil {
+		return fmt.Errorf("reconfigure replication for %s: %w", nodeID, err)
+	}
+
+	// Restart PostgreSQL so it comes up as a standby.
+	if err := m.caller.RestartPostgres(ctx, nodeAddr); err != nil {
+		return fmt.Errorf("restart postgres for %s: %w", nodeID, err)
+	}
+
+	m.mu.Lock()
+	m.oldPrimaryID = ""
+	m.newPrimaryConnInfo = ""
+	m.mu.Unlock()
+
+	m.log.Info("old primary rejoined as replica", zap.String("node", nodeID))
 	return nil
 }
 
@@ -233,6 +279,9 @@ func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 			continue
 		}
 		if node.State != models.StateHealthy {
+			continue
+		}
+		if node.Role != models.RoleReplica {
 			continue
 		}
 		if best == nil || node.WALReplayLSN > best.WALReplayLSN {
@@ -276,30 +325,41 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 		m.mu.Unlock()
 		return fmt.Errorf("failover: already in progress")
 	}
+	// Re-validate: check target hasn't become primary due to concurrent failover.
+	if m.topo.Primary() == targetNodeID {
+		m.mu.Unlock()
+		return fmt.Errorf("failover: target %q is already the primary (concurrent failover occurred)", targetNodeID)
+	}
 	m.failoverInProgress = true
 	m.mu.Unlock()
 
+	start := time.Now()
+	manualResult := "error"
 	defer func() {
+		metrics.FailoverTotal.WithLabelValues("manual", manualResult).Inc()
+		metrics.FailoverDurationSeconds.Observe(time.Since(start).Seconds())
 		m.mu.Lock()
 		m.failoverInProgress = false
 		m.mu.Unlock()
 	}()
 
 	isLeader, err := m.coord.IsLeader(ctx)
-	if err != nil || !isLeader {
+	if err != nil {
+		return fmt.Errorf("failover: coordinator check failed: %w", err)
+	}
+	if !isLeader {
 		return fmt.Errorf("failover: not the leader")
 	}
 
+	oldPrimary := m.topo.Primary()
+
 	if m.cfg.QuorumSize > 0 {
-		currentPrimary := m.topo.Primary()
-		healthyReplicas := m.countHealthyReplicas(currentPrimary)
+		healthyReplicas := m.countHealthyReplicas(oldPrimary)
 		if healthyReplicas < m.cfg.QuorumSize {
 			return fmt.Errorf("failover: quorum not met (healthy replicas: %d, required: %d)",
 				healthyReplicas, m.cfg.QuorumSize)
 		}
 	}
-
-	oldPrimary := m.topo.Primary()
 	m.log.Info("promoting target node", zap.String("node", targetNodeID))
 
 	if m.caller != nil && target.Address != "" {
@@ -308,12 +368,29 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 		}
 	}
 
+	m.topo.SetPrimary(targetNodeID)
+
+	if err := m.coord.PutClusterState(ctx, "primary", targetNodeID); err != nil {
+		m.log.Warn("failed to persist primary to etcd", zap.Error(err))
+	}
+
 	if err := m.replConf.ReconfigureAfterFailover(ctx, targetNodeID); err != nil {
 		m.log.Error("replication reconfiguration failed", zap.Error(err))
 	}
 
-	m.topo.SetPrimary(targetNodeID)
+	if target.Address != "" {
+		m.mu.Lock()
+		m.oldPrimaryID = oldPrimary
+		m.newPrimaryConnInfo = m.replConf.PrimaryConnInfo(target.Address)
+		m.mu.Unlock()
+	} else {
+		m.log.Warn("target address unknown, old primary cannot be auto-rewound",
+			zap.String("old_primary", oldPrimary),
+			zap.String("new_primary", targetNodeID),
+		)
+	}
 
+	manualResult = "success"
 	now := time.Now()
 	m.log.Info("manual failover completed",
 		zap.String("old_primary", oldPrimary),

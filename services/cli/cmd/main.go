@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -33,13 +36,14 @@ func main() {
 	}
 
 	root.PersistentFlags().StringVar(&orchestratorAddr, "addr", "localhost:50051",
-		"Адрес gRPC API оркестратора")
+		"Адрес gRPC API оркестратора (HTTP-порт выводится автоматически)")
 
 	root.AddCommand(
 		newCmdStatus(),
 		newCmdFailover(),
 		newCmdNodes(),
 		newCmdReplication(),
+		newCmdEvents(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -65,8 +69,10 @@ func runStatus(addr string, w io.Writer) error {
 	}
 	defer conn.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
-		GetClusterStatus(context.Background(), &orchestratorv1.GetClusterStatusRequest{})
+		GetClusterStatus(ctx, &orchestratorv1.GetClusterStatusRequest{})
 	if err != nil {
 		return fmt.Errorf("GetClusterStatus: %w", err)
 	}
@@ -83,13 +89,11 @@ func newCmdFailover() *cobra.Command {
 		Use:   "failover",
 		Short: "Инициировать ручной failover на указанный узел",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if targetNode == "" {
-				return fmt.Errorf("--target требует указания node-id")
-			}
 			return runFailover(orchestratorAddr, targetNode, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().StringVar(&targetNode, "target", "", "Node ID нового primary")
+	_ = cmd.MarkFlagRequired("target")
 	return cmd
 }
 
@@ -100,8 +104,10 @@ func runFailover(addr, targetNode string, w io.Writer) error {
 	}
 	defer conn.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
-		TriggerFailover(context.Background(), &orchestratorv1.TriggerFailoverRequest{
+		TriggerFailover(ctx, &orchestratorv1.TriggerFailoverRequest{
 			TargetNode: targetNode,
 		})
 	if err != nil {
@@ -131,8 +137,10 @@ func runNodes(addr string, w io.Writer) error {
 	}
 	defer conn.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
-		ListNodes(context.Background(), &orchestratorv1.ListNodesRequest{})
+		ListNodes(ctx, &orchestratorv1.ListNodesRequest{})
 	if err != nil {
 		return fmt.Errorf("ListNodes: %w", err)
 	}
@@ -168,6 +176,55 @@ func newCmdReplication() *cobra.Command {
 	return repl
 }
 
+type eventRow struct {
+	OldPrimary string    `json:"old_primary"`
+	NewPrimary string    `json:"new_primary"`
+	Reason     string    `json:"reason"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// deriveHTTPAddr replaces the port in a gRPC address with the default HTTP port
+// (8080). This lets users specify only --addr and have the events command
+// automatically reach the orchestrator HTTP API.
+func deriveHTTPAddr(grpcAddr string) string {
+	host, _, err := net.SplitHostPort(grpcAddr)
+	if err != nil {
+		// If we cannot parse, fall back to the raw address with default HTTP port.
+		return grpcAddr
+	}
+	return net.JoinHostPort(host, "8080")
+}
+
+func newCmdEvents() *cobra.Command {
+	return &cobra.Command{
+		Use:   "events",
+		Short: "Показать историю событий failover",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runEvents(deriveHTTPAddr(orchestratorAddr), cmd.OutOrStdout())
+		},
+	}
+}
+
+func runEvents(addr string, w io.Writer) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("http://" + addr + "/api/v1/events")
+	if err != nil {
+		return fmt.Errorf("http get events: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var rows []eventRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return fmt.Errorf("decode events: %w", err)
+	}
+
+	fmt.Fprintf(w, "%-20s %-20s %-10s %s\n", "OLD_PRIMARY", "NEW_PRIMARY", "REASON", "OCCURRED_AT")
+	for _, r := range rows {
+		fmt.Fprintf(w, "%-20s %-20s %-10s %s\n", r.OldPrimary, r.NewPrimary, r.Reason, r.OccurredAt.String())
+	}
+	return nil
+}
+
 func runSetSync(addr, names string, w io.Writer) error {
 	conn, err := dial(addr)
 	if err != nil {
@@ -175,8 +232,10 @@ func runSetSync(addr, names string, w io.Writer) error {
 	}
 	defer conn.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	resp, err := orchestratorv1.NewOrchestratorServiceClient(conn).
-		UpdateReplicationConfig(context.Background(), &orchestratorv1.UpdateReplicationConfigRequest{
+		UpdateReplicationConfig(ctx, &orchestratorv1.UpdateReplicationConfigRequest{
 			SynchronousStandbyNames: names,
 			EnableSyncReplication:   names != "",
 		})

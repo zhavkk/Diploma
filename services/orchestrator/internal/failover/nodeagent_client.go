@@ -20,8 +20,8 @@ const (
 type NodeAgentCaller interface {
 	PromoteNode(ctx context.Context, nodeAddr string) error
 	ReconfigureReplication(ctx context.Context, nodeAddr, primaryConnInfo, timeline string) error
-
 	RunPgRewind(ctx context.Context, nodeAddr, sourceConnInfo string) error
+	RestartPostgres(ctx context.Context, nodeAddr string) error
 }
 
 type GRPCNodeAgentCaller struct {
@@ -120,6 +120,25 @@ func (c *GRPCNodeAgentCaller) RunPgRewind(ctx context.Context, nodeAddr, sourceC
 		}
 		if !resp.Success {
 			return fmt.Errorf("RunPgRewind %s: %s", nodeAddr, resp.Message)
+		}
+		return nil
+	})
+}
+
+func (c *GRPCNodeAgentCaller) RestartPostgres(ctx context.Context, nodeAddr string) error {
+	return withRetry(ctx, defaultMaxRetries, defaultRetryBaseWait, func() error {
+		conn, err := c.dial(nodeAddr)
+		if err != nil {
+			return fmt.Errorf("nodeagent dial %s: %w", nodeAddr, err)
+		}
+		defer conn.Close()
+
+		resp, err := nodeagentv1.NewNodeAgentServiceClient(conn).RestartPostgres(ctx, &nodeagentv1.RestartPostgresRequest{})
+		if err != nil {
+			return fmt.Errorf("RestartPostgres rpc %s: %w", nodeAddr, err)
+		}
+		if !resp.Success {
+			return fmt.Errorf("RestartPostgres %s: %s", nodeAddr, resp.Message)
 		}
 		return nil
 	})

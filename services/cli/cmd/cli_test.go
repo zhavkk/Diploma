@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
@@ -168,5 +171,106 @@ func TestCmdReplicationSetSync_CallsUpdateConfig(t *testing.T) {
 	}
 	if srv.updateNames != "pg-replica1" {
 		t.Errorf("SynchronousStandbyNames = %q, want %q", srv.updateNames, "pg-replica1")
+	}
+}
+
+// ─────────────────────────────────────────
+// deriveHTTPAddr
+// ─────────────────────────────────────────
+
+func TestDeriveHTTPAddr(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"default gRPC addr", "localhost:50051", "localhost:8080"},
+		{"custom host", "orchestrator.local:50051", "orchestrator.local:8080"},
+		{"already 8080", "localhost:8080", "localhost:8080"},
+		{"ipv4 addr", "10.0.0.1:50051", "10.0.0.1:8080"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deriveHTTPAddr(tt.input)
+			if got != tt.want {
+				t.Errorf("deriveHTTPAddr(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// ─────────────────────────────────────────
+// Events command (HTTP)
+// ─────────────────────────────────────────
+
+func TestCmdEvents_PrintsEvents(t *testing.T) {
+	events := []eventRow{
+		{
+			OldPrimary: "pg-primary",
+			NewPrimary: "pg-replica1",
+			Reason:     "automatic",
+			OccurredAt: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+		},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(events)
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln) //nolint:errcheck
+	t.Cleanup(func() { srv.Close() })
+
+	var buf bytes.Buffer
+	err = runEvents(ln.Addr().String(), &buf)
+	if err != nil {
+		t.Fatalf("events command: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "pg-primary") {
+		t.Errorf("output %q does not contain old primary", out)
+	}
+	if !strings.Contains(out, "pg-replica1") {
+		t.Errorf("output %q does not contain new primary", out)
+	}
+	if !strings.Contains(out, "automatic") {
+		t.Errorf("output %q does not contain reason", out)
+	}
+}
+
+func TestCmdEvents_EmptyList(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]eventRow{})
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln) //nolint:errcheck
+	t.Cleanup(func() { srv.Close() })
+
+	var buf bytes.Buffer
+	err = runEvents(ln.Addr().String(), &buf)
+	if err != nil {
+		t.Fatalf("events command: %v", err)
+	}
+	out := buf.String()
+	// Should have the header but no data rows
+	if !strings.Contains(out, "OLD_PRIMARY") {
+		t.Errorf("output %q missing header", out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected 1 line (header only), got %d", len(lines))
 	}
 }

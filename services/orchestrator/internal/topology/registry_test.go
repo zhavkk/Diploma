@@ -57,7 +57,9 @@ func TestRegistry_UpdateAndGet(t *testing.T) {
 
 func TestRegistry_GetReturnsCopy(t *testing.T) {
 	r := topology.NewRegistry(zap.NewNop())
-	r.Update(newTopo("pg-primary"))
+	r.Update(newTopo("pg-primary",
+		models.NodeStatus{NodeID: "pg-primary", Role: models.RolePrimary},
+	))
 
 	got1 := r.Get()
 	got1.PrimaryNode = "mutated"
@@ -65,6 +67,13 @@ func TestRegistry_GetReturnsCopy(t *testing.T) {
 	got2 := r.Get()
 	if got2.PrimaryNode == "mutated" {
 		t.Error("Get() should return a copy, not a pointer to internal state")
+	}
+
+	got1 = r.Get()
+	got1.Nodes[0].NodeID = "mutated"
+	got2 = r.Get()
+	if got2.Nodes[0].NodeID == "mutated" {
+		t.Error("Get() Nodes slice should be a deep copy")
 	}
 }
 
@@ -249,6 +258,44 @@ func TestRegistry_Events_ReturnsCopy(t *testing.T) {
 	ev2 := r.Events()
 	if ev2[0].OldPrimary == "mutated" {
 		t.Error("Events() should return a copy, not a shared slice")
+	}
+}
+
+func TestRegistry_AppendEvent_CapsAtMaxEvents(t *testing.T) {
+	r := topology.NewRegistry(zap.NewNop())
+
+	const maxEvents = 1000
+	const extra = 5
+	for i := 0; i < maxEvents+extra; i++ {
+		r.AppendEvent(models.FailoverEvent{
+			OldPrimary: fmt.Sprintf("old-%d", i),
+			NewPrimary: fmt.Sprintf("new-%d", i),
+			Reason:     "test",
+		})
+	}
+
+	events := r.Events()
+	if len(events) != maxEvents {
+		t.Errorf("expected %d events (capped), got %d", maxEvents, len(events))
+	}
+	// The last event should be the most recently appended.
+	last := events[len(events)-1]
+	wantOld := fmt.Sprintf("old-%d", maxEvents+extra-1)
+	if last.OldPrimary != wantOld {
+		t.Errorf("last event OldPrimary = %q, want %q", last.OldPrimary, wantOld)
+	}
+}
+
+func TestUpsertNode_DoesNotOverridePrimaryAfterFailover(t *testing.T) {
+	reg := topology.NewRegistry(zap.NewNop())
+	reg.UpsertNode(models.NodeStatus{NodeID: "n1", Role: models.RolePrimary, State: models.StateHealthy})
+	reg.UpsertNode(models.NodeStatus{NodeID: "n2", Role: models.RoleReplica, State: models.StateHealthy})
+	// simulate failover: new primary is n2
+	reg.SetPrimary("n2")
+	// stale heartbeat from old primary
+	reg.UpsertNode(models.NodeStatus{NodeID: "n1", Role: models.RolePrimary, State: models.StateHealthy})
+	if reg.Primary() != "n2" {
+		t.Fatalf("expected primary=n2, got %s", reg.Primary())
 	}
 }
 

@@ -4,9 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "github.com/lib/pq"
+	"go.uber.org/zap"
 )
+
+// retryInterval controls how long to wait between ping retries.
+// Overridable in tests.
+var retryInterval = 3 * time.Second
 
 type Config struct {
 	Host     string
@@ -21,18 +27,47 @@ type Client struct {
 	db *sql.DB
 }
 
-func New(cfg Config) (*Client, error) {
-	dsn := fmt.Sprintf(
+func buildDSN(cfg Config) string {
+	return fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode,
 	)
+}
+
+func New(ctx context.Context, cfg Config, log *zap.Logger) (*Client, error) {
+	dsn := buildDSN(cfg)
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("pgclient: open: %w", err)
 	}
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("pgclient: ping: %w", err)
+	ok := false
+	defer func() {
+		if !ok {
+			_ = db.Close()
+		}
+	}()
+
+	const maxAttempts = 10
+	var pingErr error
+	for i := 1; i <= maxAttempts; i++ {
+		pingErr = db.PingContext(ctx)
+		if pingErr == nil {
+			break
+		}
+		log.Warn("pgclient: ping failed", zap.Int("attempt", i), zap.Error(pingErr))
+		if i == maxAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("pgclient: context cancelled during startup: %w", ctx.Err())
+		case <-time.After(retryInterval):
+		}
 	}
+	if pingErr != nil {
+		return nil, fmt.Errorf("pgclient: ping after %d attempts: %w", maxAttempts, pingErr)
+	}
+	ok = true
 	return &Client{db: db}, nil
 }
 
@@ -95,12 +130,14 @@ func (c *Client) ReplicationStats(ctx context.Context) ([]ReplicationStat, error
 	var stats []ReplicationStat
 	for rows.Next() {
 		var s ReplicationStat
+		var clientAddr sql.NullString
 		if err := rows.Scan(
-			&s.ApplicationName, &s.ClientAddr, &s.State,
+			&s.ApplicationName, &clientAddr, &s.State,
 			&s.WriteLag, &s.FlushLag, &s.ReplayLag,
 		); err != nil {
 			return nil, fmt.Errorf("pgclient: replication_stats scan: %w", err)
 		}
+		s.ClientAddr = clientAddr.String // empty string when NULL
 		stats = append(stats, s)
 	}
 	return stats, rows.Err()

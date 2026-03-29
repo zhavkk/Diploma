@@ -65,13 +65,41 @@ func TestHealthServer_Primary_Returns503WhenNilStatus(t *testing.T) {
 	}
 }
 
+func TestHealthServer_Primary_Returns503WhenPostgresNotRunning(t *testing.T) {
+	// PostgresRunning=false, IsInRecovery=false — crashed primary should return 503.
+	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
+		status: &models.NodeStatus{IsInRecovery: false, PostgresRunning: false},
+	}, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	srv.HandlePrimary(w, httptest.NewRequest(http.MethodGet, "/health/primary", nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 when PostgresRunning=false", w.Code)
+	}
+}
+
+func TestHealthServer_Replica_Returns503WhenPostgresNotRunning(t *testing.T) {
+	// PostgresRunning=false, IsInRecovery=true — crashed replica should return 503.
+	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
+		status: &models.NodeStatus{IsInRecovery: true, PostgresRunning: false},
+	}, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	srv.HandleReplica(w, httptest.NewRequest(http.MethodGet, "/health/replica", nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 when PostgresRunning=false", w.Code)
+	}
+}
+
 // ─────────────────────────────────────────
 // /health/replica
 // ─────────────────────────────────────────
 
 func TestHealthServer_Replica_Returns200WhenReplica(t *testing.T) {
 	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
-		status: &models.NodeStatus{IsInRecovery: true},
+		status: &models.NodeStatus{IsInRecovery: true, PostgresRunning: true},
 	}, zap.NewNop())
 
 	w := httptest.NewRecorder()

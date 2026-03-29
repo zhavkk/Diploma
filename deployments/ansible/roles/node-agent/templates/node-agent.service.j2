@@ -7,10 +7,11 @@ Requires=postgresql.service
 Type=simple
 User=postgres
 Environment=NODE_ID={{ node_id }}
+Environment=NODE_ADDR={{ node_addr }}
+Environment=ORCHESTRATOR_ADDR={{ orchestrator_addr }}
 Environment=PG_USER={{ pg_user }}
 Environment=PG_PASSWORD={{ pg_password }}
 Environment=PGDATA=/var/lib/postgresql/{{ pg_version }}/main
-Environment=ORCHESTRATOR_ADDR={{ orchestrator_addr }}
 ExecStart=/usr/local/bin/node-agent
 Restart=always
 RestartSec=5

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net"
 
 	"go.uber.org/zap"
@@ -41,10 +42,10 @@ func New(cfg Config, commander PGCommander, statusProv NodeStatusProvider, log *
 	}
 }
 
-func (c *Controller) Run(ctx context.Context) {
+func (c *Controller) Run(ctx context.Context) error {
 	lis, err := net.Listen("tcp", c.cfg.GRPCAddr)
 	if err != nil {
-		c.log.Fatal("node controller listen failed", zap.Error(err))
+		return fmt.Errorf("node controller listen: %w", err)
 	}
 
 	nodeagentv1.RegisterNodeAgentServiceServer(c.grpcSrv, c)
@@ -58,6 +59,7 @@ func (c *Controller) Run(ctx context.Context) {
 
 	<-ctx.Done()
 	c.grpcSrv.GracefulStop()
+	return nil
 }
 
 func (c *Controller) GetNodeStatus(_ context.Context, _ *nodeagentv1.GetNodeStatusRequest) (*nodeagentv1.GetNodeStatusResponse, error) {

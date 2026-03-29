@@ -7,6 +7,11 @@ Type=simple
 Environment=NODE_ID={{ node_id }}
 Environment=ETCD_ENDPOINTS={% for h in groups['etcd_nodes'] %}http://{{ hostvars[h]['ansible_host'] }}:2379{% if not loop.last %},{% endif %}{% endfor %}
 
+Environment=GRPC_ADDR={{ grpc_addr | default(':50051') }}
+Environment=HTTP_ADDR={{ http_addr | default(':8080') }}
+Environment=HEARTBEAT_TIMEOUT={{ heartbeat_timeout | default('10') }}
+Environment=QUORUM_SIZE={{ quorum_size | default('1') }}
+
 ExecStart=/usr/local/bin/ha-orchestrator
 Restart=always
 RestartSec=5

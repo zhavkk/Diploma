@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"testing"
@@ -385,6 +386,110 @@ func TestServer_GetClusterStatus_FailoverInProgressFalse(t *testing.T) {
 	}
 }
 
+func TestServer_HandleStatus_ReturnsJSON(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpAddr := ln.Addr().String()
+	ln.Close()
+
+	topo := &mockTopology{topo: sampleTopology()}
+	srv := api.NewServer(
+		api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: httpAddr},
+		topo, &mockFailover{}, &mockReplConf{}, &mockHeartbeatReceiver{},
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx) //nolint:errcheck
+
+	deadline := time.Now().Add(2 * time.Second)
+	var resp *http.Response
+	for time.Now().Before(deadline) {
+		resp, err = http.Get("http://" + httpAddr + "/api/v1/status")
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GET /api/v1/status: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var got models.ClusterTopology
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if got.PrimaryNode != "pg-primary" {
+		t.Errorf("PrimaryNode = %q, want pg-primary", got.PrimaryNode)
+	}
+}
+
+func TestServer_HandleEvents_ReturnsJSONArray(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpAddr := ln.Addr().String()
+	ln.Close()
+
+	events := []models.FailoverEvent{
+		{OldPrimary: "pg-primary", NewPrimary: "pg-replica1", Reason: "automatic"},
+	}
+	topo := &mockTopology{topo: sampleTopology(), events: events}
+	srv := api.NewServer(
+		api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: httpAddr},
+		topo, &mockFailover{}, &mockReplConf{}, &mockHeartbeatReceiver{},
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx) //nolint:errcheck
+
+	deadline := time.Now().Add(2 * time.Second)
+	var resp *http.Response
+	for time.Now().Before(deadline) {
+		resp, err = http.Get("http://" + httpAddr + "/api/v1/events")
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GET /api/v1/events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var got []models.FailoverEvent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("events count = %d, want 1", len(got))
+	}
+	if got[0].Reason != "automatic" {
+		t.Errorf("Reason = %q, want automatic", got[0].Reason)
+	}
+}
+
 func TestServer_HandleEvents_ReturnsEmptySlice(t *testing.T) {
 	topo := &mockTopology{topo: sampleTopology()}
 	srv := api.NewServer(
@@ -416,6 +521,108 @@ func TestServer_HandleEvents_ReturnsStoredEvents(t *testing.T) {
 	}
 	if got[0].Reason != "automatic" {
 		t.Errorf("Reason = %q, want %q", got[0].Reason, "automatic")
+	}
+}
+
+func TestServer_ReportHeartbeat_SetsDegradedWhenPostgresNotRunning(t *testing.T) {
+	hb := &mockHeartbeatReceiver{}
+	client, cleanup := setupOrchestratorWithHB(t, &mockTopology{}, &mockFailover{}, &mockReplConf{}, hb)
+	defer cleanup()
+
+	_, err := client.ReportHeartbeat(context.Background(), &orchestratorv1.ReportHeartbeatRequest{
+		NodeId:          "pg-replica1",
+		Address:         "replica1:50052",
+		Role:            "replica",
+		PostgresRunning: false,
+	})
+	if err != nil {
+		t.Fatalf("ReportHeartbeat: %v", err)
+	}
+	if hb.received == nil {
+		t.Fatal("expected ReceiveHeartbeat to be called")
+	}
+	if hb.received.State != models.StateDegraded {
+		t.Errorf("State = %q, want %q when PostgresRunning=false", hb.received.State, models.StateDegraded)
+	}
+}
+
+func TestServer_HandleStatus_RejectsNonGET(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpAddr := ln.Addr().String()
+	ln.Close()
+
+	topo := &mockTopology{topo: sampleTopology()}
+	srv := api.NewServer(
+		api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: httpAddr},
+		topo, &mockFailover{}, &mockReplConf{}, &mockHeartbeatReceiver{},
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx) //nolint:errcheck
+
+	// Wait for server to start.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, e := http.Get("http://" + httpAddr + "/healthz")
+		if e == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp, err := http.Post("http://"+httpAddr+"/api/v1/status", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/v1/status: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405 MethodNotAllowed for POST", resp.StatusCode)
+	}
+}
+
+func TestServer_HandleEvents_RejectsNonGET(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpAddr := ln.Addr().String()
+	ln.Close()
+
+	topo := &mockTopology{topo: sampleTopology()}
+	srv := api.NewServer(
+		api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: httpAddr},
+		topo, &mockFailover{}, &mockReplConf{}, &mockHeartbeatReceiver{},
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx) //nolint:errcheck
+
+	// Wait for server to start.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, e := http.Get("http://" + httpAddr + "/healthz")
+		if e == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp, err := http.Post("http://"+httpAddr+"/api/v1/events", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/v1/events: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405 MethodNotAllowed for POST", resp.StatusCode)
 	}
 }
 

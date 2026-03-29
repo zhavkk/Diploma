@@ -1,0 +1,79 @@
+---
+# Deploy and configure PostgreSQL for HA cluster
+
+- name: Install PostgreSQL 16
+  apt:
+    name:
+      - postgresql-16
+      - postgresql-client-16
+      - python3-psycopg2
+    state: present
+    update_cache: true
+
+- name: Ensure PostgreSQL data directory exists
+  file:
+    path: /var/lib/postgresql/16/main
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'
+
+- name: Deploy postgresql.conf (primary only)
+  template:
+    src: postgresql.conf.j2
+    dest: /etc/postgresql/16/main/postgresql.conf
+    owner: postgres
+    group: postgres
+    mode: '0644'
+  when: pg_role == 'primary'
+  notify: restart postgresql
+
+- name: Deploy pg_hba.conf (primary only)
+  template:
+    src: pg_hba.conf.j2
+    dest: /etc/postgresql/16/main/pg_hba.conf
+    owner: postgres
+    group: postgres
+    mode: '0640'
+  when: pg_role == 'primary'
+  notify: reload postgresql
+
+- name: Ensure PostgreSQL is started (primary)
+  systemd:
+    name: postgresql
+    state: started
+    enabled: true
+  when: pg_role == 'primary'
+
+- name: Create replication user (primary only)
+  become: true
+  become_user: postgres
+  postgresql_user:
+    name: replicator
+    password: "{{ replication_password | default('replicator') }}"
+    role_attr_flags: REPLICATION
+    state: present
+  when: pg_role == 'primary'
+
+- name: Initialize replica from primary (replica only)
+  become: true
+  become_user: postgres
+  shell: |
+    if [ ! -f /var/lib/postgresql/16/main/PG_VERSION ]; then
+      PGPASSWORD="{{ replication_password | default('replicator') }}" pg_basebackup \
+        -h {{ hostvars['pg-primary']['ansible_host'] }} \
+        -D /var/lib/postgresql/16/main \
+        -U replicator \
+        -Fp -Xs -P -R \
+        --checkpoint=fast
+    fi
+  when: pg_role == 'replica'
+  args:
+    creates: /var/lib/postgresql/16/main/PG_VERSION
+
+- name: Ensure PostgreSQL is started (replica)
+  systemd:
+    name: postgresql
+    state: started
+    enabled: true
+  when: pg_role == 'replica'

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,13 +19,15 @@ import (
 )
 
 func main() {
-	log, _ := zap.NewProduction()
+	log, err := zap.NewProduction()
+	if err != nil {
+		panic(fmt.Sprintf("failed to initialize logger: %v", err))
+	}
 	defer log.Sync()
 
 	cfg, err := config.LoadOrchestrator()
 	if err != nil {
 		log.Fatal("config load failed", zap.Error(err))
-		os.Exit(1)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -41,8 +44,21 @@ func main() {
 	}
 	defer coordModule.Close()
 
+	// Seed topology with last known primary from etcd.
+	if primary, err := coordModule.GetClusterState(ctx, "primary"); err != nil {
+		log.Warn("failed to read last primary from etcd", zap.Error(err))
+	} else if primary != "" {
+		log.Info("restoring primary from etcd", zap.String("primary", primary))
+		topoRegistry.SetPrimary(primary)
+	}
+
 	nodeAgentCaller := failover.NewGRPCNodeAgentCaller()
-	replConfigurator := replication.NewConfigurator(topoRegistry, nodeAgentCaller, log)
+	replConfigurator := replication.NewConfiguratorWithConfig(replication.Config{
+		ReplicationPassword: cfg.ReplicationPassword,
+		ReplicationUser:     cfg.ReplicationUser,
+		SSLMode:             "disable",
+		PGPort:              cfg.ReplicationPGPort,
+	}, topoRegistry, nodeAgentCaller, log)
 
 	failoverMgr := failover.NewManager(failover.Config{
 		QuorumSize: cfg.QuorumSize,

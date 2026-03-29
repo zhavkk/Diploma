@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
@@ -62,6 +63,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	httpSrv := &http.Server{Addr: s.cfg.HTTPAddr, Handler: mux}
@@ -144,8 +146,11 @@ func (s *Server) UpdateReplicationConfig(ctx context.Context, req *orchestratorv
 	topo := s.topo.Get()
 	var targetNodes []string
 	if topo != nil {
+		primary := s.topo.Primary()
 		for _, n := range topo.Nodes {
-			targetNodes = append(targetNodes, n.NodeID)
+			if n.NodeID != primary {
+				targetNodes = append(targetNodes, n.NodeID)
+			}
 		}
 	}
 	cfg := models.ReplicationConfig{
@@ -159,6 +164,10 @@ func (s *Server) UpdateReplicationConfig(ctx context.Context, req *orchestratorv
 }
 
 func (s *Server) ReportHeartbeat(_ context.Context, req *orchestratorv1.ReportHeartbeatRequest) (*orchestratorv1.ReportHeartbeatResponse, error) {
+	state := models.StateHealthy
+	if !req.PostgresRunning {
+		state = models.StateDegraded
+	}
 	status := &models.NodeStatus{
 		NodeID:          req.NodeId,
 		Address:         req.Address,
@@ -167,23 +176,35 @@ func (s *Server) ReportHeartbeat(_ context.Context, req *orchestratorv1.ReportHe
 		WALReplayLSN:    req.WalReplayLsn,
 		ReplicationLag:  req.ReplicationLag,
 		PostgresRunning: req.PostgresRunning,
-		State:           models.StateHealthy,
+		State:           state,
 	}
 	s.heartbeat.ReceiveHeartbeat(status)
 	return &orchestratorv1.ReportHeartbeatResponse{Ok: true}, nil
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	topo := s.topo.Get()
 	if topo == nil {
 		http.Error(w, "topology not ready", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(topo)
+	if err := json.NewEncoder(w).Encode(topo); err != nil {
+		s.log.Warn("failed to encode response", zap.Error(err))
+	}
 }
 
-func (s *Server) handleEvents(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.topo.Events())
+	if err := json.NewEncoder(w).Encode(s.topo.Events()); err != nil {
+		s.log.Warn("failed to encode response", zap.Error(err))
+	}
 }

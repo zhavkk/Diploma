@@ -47,6 +47,7 @@ func (m *integMockTopo) SetPrimary(id string) {
 type integMockCoord struct{ isLeader bool }
 
 func (m *integMockCoord) IsLeader(_ context.Context) (bool, error) { return m.isLeader, nil }
+func (m *integMockCoord) PutClusterState(_ context.Context, _, _ string) error { return nil }
 
 type integMockCaller struct {
 	mu                 sync.Mutex
@@ -66,7 +67,8 @@ func (m *integMockCaller) ReconfigureReplication(_ context.Context, addr, _, _ s
 	m.reconfigCalledAddr = addr
 	return nil
 }
-func (m *integMockCaller) RunPgRewind(_ context.Context, _, _ string) error { return nil }
+func (m *integMockCaller) RunPgRewind(_ context.Context, _, _ string) error    { return nil }
+func (m *integMockCaller) RestartPostgres(_ context.Context, _ string) error   { return nil }
 
 // controllableClock для интеграционных тестов
 type integClock struct {

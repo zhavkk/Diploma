@@ -23,3 +23,6 @@ api/proto/gen/
 
 # Logs
 *.log
+
+CLAUDE.md
+.claude

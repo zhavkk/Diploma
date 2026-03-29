@@ -70,20 +70,35 @@ func (c *Client) Watch(ctx context.Context, key string) <-chan string {
 	return ch
 }
 
-func (c *Client) Campaign(ctx context.Context, electionName, candidateID string) (*concurrency.Election, error) {
+// ElectionHandle holds both the election and the underlying session so that
+// Resign can close both, preventing a session leak.
+type ElectionHandle struct {
+	election *concurrency.Election
+	session  *concurrency.Session
+}
+
+func (h *ElectionHandle) SessionDone() <-chan struct{} {
+	return h.session.Done()
+}
+
+func (c *Client) Campaign(ctx context.Context, electionName, candidateID string) (*ElectionHandle, error) {
 	sess, err := concurrency.NewSession(c.etcd, concurrency.WithTTL(10))
 	if err != nil {
 		return nil, fmt.Errorf("etcdclient: new session: %w", err)
 	}
 	election := concurrency.NewElection(sess, electionName)
 	if err := election.Campaign(ctx, candidateID); err != nil {
+		_ = sess.Close()
 		return nil, fmt.Errorf("etcdclient: campaign: %w", err)
 	}
-	return election, nil
+	return &ElectionHandle{election: election, session: sess}, nil
 }
 
-func (c *Client) Resign(ctx context.Context, election *concurrency.Election) error {
-	return election.Resign(ctx)
+func (c *Client) Resign(ctx context.Context, handle *ElectionHandle) error {
+	if err := handle.election.Resign(ctx); err != nil {
+		return err
+	}
+	return handle.session.Close()
 }
 
 func (c *Client) Close() error {

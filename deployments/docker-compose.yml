@@ -45,11 +45,18 @@ services:
       - pg-primary-data:/var/lib/postgresql/data
       - ./configs/pg-primary/postgresql.conf:/etc/postgresql/postgresql.conf
       - ./configs/pg-primary/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./configs/pg-primary/init-replication.sql:/docker-entrypoint-initdb.d/01-replication.sql
     command: postgres -c config_file=/etc/postgresql/postgresql.conf
     networks:
       - ha-net
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # ─────────────────────────────────────────
   # Node Agent на Primary
@@ -60,8 +67,6 @@ services:
       dockerfile: deployments/Dockerfile.node-agent
     environment:
       NODE_ID: "pg-primary"
-      # NODE_ADDR — gRPC-адрес этого node-agent внутри docker-сети.
-      # Оркестратор использует его для вызовов PromoteNode / ReconfigureReplication.
       NODE_ADDR: "node-agent-primary:50052"
       ORCHESTRATOR_ADDR: "orchestrator:50051"
       PG_HOST: "pg-primary"
@@ -70,12 +75,16 @@ services:
       PGDATA: /var/lib/postgresql/data
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
+    volumes:
+      - pg-primary-data:/var/lib/postgresql/data
+    pid: "service:pg-primary"
     networks:
       - ha-net
     depends_on:
-      - pg-primary
+      pg-primary:
+        condition: service_healthy
     ports:
-      - "8081:8081"   # HTTP /health для HAProxy
+      - "8081:8081"
 
   # ─────────────────────────────────────────
   # PostgreSQL Replica 1 (синхронная)
@@ -86,14 +95,25 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
+      PG_PRIMARY_HOST: pg-primary
+      REPLICATION_PASSWORD: replicator
     volumes:
       - pg-replica1-data:/var/lib/postgresql/data
+      - ./scripts/replica-setup.sh:/replica-setup.sh
+    entrypoint: ["/bin/bash", "/replica-setup.sh"]
     networks:
       - ha-net
     ports:
       - "5433:5432"
     depends_on:
-      - pg-primary
+      pg-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
   node-agent-replica1:
     build:
@@ -109,12 +129,15 @@ services:
       PGDATA: /var/lib/postgresql/data
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
+    volumes:
+      - pg-replica1-data:/var/lib/postgresql/data
+    pid: "service:pg-replica1"
     networks:
       - ha-net
     depends_on:
-      - pg-replica1
+      pg-replica1:
+        condition: service_healthy
     ports:
-      # Внешний порт 8082 → внутренний 8081 (все node-agent слушают :8081)
       - "8082:8081"
 
   # ─────────────────────────────────────────
@@ -126,14 +149,25 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
+      PG_PRIMARY_HOST: pg-primary
+      REPLICATION_PASSWORD: replicator
     volumes:
       - pg-replica2-data:/var/lib/postgresql/data
+      - ./scripts/replica-setup.sh:/replica-setup.sh
+    entrypoint: ["/bin/bash", "/replica-setup.sh"]
     networks:
       - ha-net
     ports:
       - "5434:5432"
     depends_on:
-      - pg-primary
+      pg-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
   node-agent-replica2:
     build:
@@ -149,10 +183,14 @@ services:
       PGDATA: /var/lib/postgresql/data
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
+    volumes:
+      - pg-replica2-data:/var/lib/postgresql/data
+    pid: "service:pg-replica2"
     networks:
       - ha-net
     depends_on:
-      - pg-replica2
+      pg-replica2:
+        condition: service_healthy
     ports:
       - "8083:8081"
 
@@ -175,13 +213,11 @@ services:
     depends_on:
       - etcd
     ports:
-      - "50051:50051"   # gRPC API
-      - "8080:8080"     # HTTP API
+      - "50051:50051"
+      - "8080:8080"
 
   # ─────────────────────────────────────────
   # HAProxy — load balancer
-  # HAProxy находится в той же docker-сети, поэтому health checks обращаются
-  # к service-именам и внутреннему порту 8081 (не к внешним портам хоста).
   # ─────────────────────────────────────────
   haproxy:
     image: haproxy:2.9
@@ -194,6 +230,6 @@ services:
       - node-agent-replica1
       - node-agent-replica2
     ports:
-      - "5000:5000"   # write endpoint (→ primary)
-      - "5001:5001"   # read endpoint (→ replicas)
-      - "7000:7000"   # HAProxy stats
+      - "5000:5000"
+      - "5001:5001"
+      - "7000:7000"

@@ -1,0 +1,21 @@
+---
+# Deploy HAProxy for PostgreSQL load balancing
+
+- name: Install HAProxy
+  apt:
+    name: haproxy
+    state: present
+    update_cache: true
+
+- name: Deploy HAProxy configuration
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    mode: '0644'
+  notify: reload haproxy
+
+- name: Enable and start HAProxy
+  systemd:
+    name: haproxy
+    enabled: true
+    state: started

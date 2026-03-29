@@ -33,9 +33,21 @@ func (m *mockTopo) SetPrimary(id string)          { m.primary = id }
 type mockCoord struct {
 	isLeader bool
 	err      error
+
+	putCalls []mockPutCall
+	putErr   error
+}
+
+type mockPutCall struct {
+	Key   string
+	Value string
 }
 
 func (m *mockCoord) IsLeader(_ context.Context) (bool, error) { return m.isLeader, m.err }
+func (m *mockCoord) PutClusterState(_ context.Context, key, value string) error {
+	m.putCalls = append(m.putCalls, mockPutCall{Key: key, Value: value})
+	return m.putErr
+}
 
 // ─────────────────────────────────────────
 // Мок NodeAgentCaller
@@ -48,6 +60,8 @@ type mockNodeAgentCaller struct {
 	reconfigErr        error
 	pgRewindCalledAddr string
 	pgRewindErr        error
+	restartCalledAddr  string
+	restartErr         error
 }
 
 func (m *mockNodeAgentCaller) PromoteNode(_ context.Context, addr string) error {
@@ -63,6 +77,11 @@ func (m *mockNodeAgentCaller) ReconfigureReplication(_ context.Context, addr, _,
 func (m *mockNodeAgentCaller) RunPgRewind(_ context.Context, addr, _ string) error {
 	m.pgRewindCalledAddr = addr
 	return m.pgRewindErr
+}
+
+func (m *mockNodeAgentCaller) RestartPostgres(_ context.Context, addr string) error {
+	m.restartCalledAddr = addr
+	return m.restartErr
 }
 
 // ─────────────────────────────────────────
@@ -204,6 +223,91 @@ func TestNotifyPrimaryFailure_UpdatesTopologyOnSuccess(t *testing.T) {
 
 	if topo.primary != "pg-replica1" {
 		t.Errorf("primary after failover = %q, want %q", topo.primary, "pg-replica1")
+	}
+}
+
+// ─────────────────────────────────────────
+// Cluster state persistence to etcd
+// ─────────────────────────────────────────
+
+func TestNotifyPrimaryFailure_PersistsPrimaryToEtcd(t *testing.T) {
+	coord := &mockCoord{isLeader: true}
+	topo := &mockTopo{
+		primary: "pg-primary",
+		topo: &models.ClusterTopology{
+			PrimaryNode: "pg-primary",
+			Nodes: []models.NodeStatus{
+				{NodeID: "pg-primary", Role: models.RolePrimary, State: models.StateHealthy},
+				{NodeID: "pg-replica1", Role: models.RoleReplica, State: models.StateHealthy, WALReplayLSN: 5000},
+			},
+		},
+	}
+	mgr := failover.NewManager(failover.Config{}, topo, coord, replication.NewConfigurator(nil, nil, zap.NewNop()), nil, zap.NewNop())
+
+	mgr.NotifyPrimaryFailure(context.Background(), "pg-primary")
+
+	if len(coord.putCalls) != 1 {
+		t.Fatalf("PutClusterState called %d times, want 1", len(coord.putCalls))
+	}
+	if coord.putCalls[0].Key != "primary" {
+		t.Errorf("PutClusterState key = %q, want %q", coord.putCalls[0].Key, "primary")
+	}
+	if coord.putCalls[0].Value != "pg-replica1" {
+		t.Errorf("PutClusterState value = %q, want %q", coord.putCalls[0].Value, "pg-replica1")
+	}
+}
+
+func TestTriggerManualFailover_PersistsPrimaryToEtcd(t *testing.T) {
+	coord := &mockCoord{isLeader: true}
+	topo := &mockTopo{
+		primary: "pg-primary",
+		topo: &models.ClusterTopology{
+			PrimaryNode: "pg-primary",
+			Nodes: []models.NodeStatus{
+				{NodeID: "pg-primary", Role: models.RolePrimary, State: models.StateHealthy, Address: "primary:50052"},
+				{NodeID: "pg-replica1", Role: models.RoleReplica, State: models.StateHealthy, WALReplayLSN: 1000, Address: "replica1:50052"},
+			},
+		},
+	}
+	caller := &mockNodeAgentCaller{}
+	mgr := failover.NewManager(failover.Config{}, topo, coord,
+		replication.NewConfigurator(nil, nil, zap.NewNop()), caller, zap.NewNop())
+
+	err := mgr.TriggerManualFailover(context.Background(), "pg-replica1")
+	if err != nil {
+		t.Fatalf("TriggerManualFailover: %v", err)
+	}
+
+	if len(coord.putCalls) != 1 {
+		t.Fatalf("PutClusterState called %d times, want 1", len(coord.putCalls))
+	}
+	if coord.putCalls[0].Key != "primary" {
+		t.Errorf("PutClusterState key = %q, want %q", coord.putCalls[0].Key, "primary")
+	}
+	if coord.putCalls[0].Value != "pg-replica1" {
+		t.Errorf("PutClusterState value = %q, want %q", coord.putCalls[0].Value, "pg-replica1")
+	}
+}
+
+func TestNotifyPrimaryFailure_ContinuesWhenPutClusterStateFails(t *testing.T) {
+	coord := &mockCoord{isLeader: true, putErr: errors.New("etcd: connection refused")}
+	topo := &mockTopo{
+		primary: "pg-primary",
+		topo: &models.ClusterTopology{
+			PrimaryNode: "pg-primary",
+			Nodes: []models.NodeStatus{
+				{NodeID: "pg-primary", Role: models.RolePrimary, State: models.StateHealthy},
+				{NodeID: "pg-replica1", Role: models.RoleReplica, State: models.StateHealthy, WALReplayLSN: 5000},
+			},
+		},
+	}
+	mgr := failover.NewManager(failover.Config{}, topo, coord, replication.NewConfigurator(nil, nil, zap.NewNop()), nil, zap.NewNop())
+
+	mgr.NotifyPrimaryFailure(context.Background(), "pg-primary")
+
+	// Failover should still complete even if etcd persistence fails.
+	if topo.primary != "pg-replica1" {
+		t.Errorf("primary = %q, want %q despite PutClusterState error", topo.primary, "pg-replica1")
 	}
 }
 

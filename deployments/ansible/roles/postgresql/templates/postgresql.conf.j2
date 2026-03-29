@@ -1,0 +1,21 @@
+# postgresql.conf — managed by Ansible
+listen_addresses = '*'
+port = {{ pg_port }}
+
+wal_level = replica
+max_wal_senders = 10
+max_replication_slots = 10
+wal_keep_size = 256
+hot_standby = on
+hot_standby_feedback = on
+
+synchronous_commit = local
+checkpoint_completion_target = 0.9
+max_connections = 200
+
+log_destination = 'stderr'
+logging_collector = on
+log_directory = 'pg_log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_min_duration_statement = 1000
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '

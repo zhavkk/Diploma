@@ -5,8 +5,8 @@ PROTO_OUT := api/proto/gen
 
 .PHONY: all build build-orchestrator build-node-agent build-cli \
         proto lint test clean \
-        docker-build up down logs \
-        deploy-local help
+        docker-build docker-build-cli up down logs \
+        ansible-check deploy-local help
 
 all: proto build
 
@@ -60,9 +60,13 @@ test:
 	go test ./... -v -race -count=1
 
 
-docker-build:
+docker-build: docker-build-cli
 	docker build -f deployments/Dockerfile.orchestrator -t ha-orchestrator:latest .
 	docker build -f deployments/Dockerfile.node-agent   -t ha-node-agent:latest   .
+
+# Build CLI Docker image
+docker-build-cli:
+	docker build -f deployments/Dockerfile.cli -t ha-cli:latest .
 
 up:
 	docker compose -f deployments/docker-compose.yml up -d
@@ -73,6 +77,10 @@ down:
 logs:
 	docker compose -f deployments/docker-compose.yml logs -f
 
+
+# Validate Ansible playbook syntax
+ansible-check:
+	ansible-playbook --syntax-check -i deployments/ansible/inventory.yml deployments/ansible/site.yml
 
 clean:
 	rm -rf $(BIN) $(PROTO_OUT)

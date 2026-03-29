@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -18,14 +20,43 @@ type NodeAgentCaller interface {
 	ReconfigureReplication(ctx context.Context, nodeAddr, primaryConnInfo, timeline string) error
 }
 
+type Config struct {
+	ReplicationPassword string
+	ReplicationUser     string // defaults to "replicator"
+	SSLMode             string // defaults to "disable"
+	PGPort              int    // defaults to 5432
+}
+
+func connInfoQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	return "'" + s + "'"
+}
+
 type Configurator struct {
+	cfg    Config
 	topo   TopologySource
 	caller NodeAgentCaller
 	log    *zap.Logger
 }
 
 func NewConfigurator(topo TopologySource, caller NodeAgentCaller, log *zap.Logger) *Configurator {
-	return &Configurator{topo: topo, caller: caller, log: log}
+	return &Configurator{
+		cfg:    Config{SSLMode: "disable", ReplicationUser: "replicator"},
+		topo:   topo,
+		caller: caller,
+		log:    log,
+	}
+}
+
+func NewConfiguratorWithConfig(cfg Config, topo TopologySource, caller NodeAgentCaller, log *zap.Logger) *Configurator {
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = "disable"
+	}
+	if cfg.ReplicationUser == "" {
+		cfg.ReplicationUser = "replicator"
+	}
+	return &Configurator{cfg: cfg, topo: topo, caller: caller, log: log}
 }
 
 func (c *Configurator) Apply(ctx context.Context, cfg models.ReplicationConfig, targetNodes []string) error {
@@ -63,7 +94,20 @@ func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryN
 
 	addrMap := c.buildAddrMap()
 	newPrimaryAddr := addrMap[newPrimaryNodeID]
-	primaryConnInfo := fmt.Sprintf("host=%s port=5432 user=replicator", newPrimaryAddr)
+	host := newPrimaryAddr
+	if h, _, err := net.SplitHostPort(newPrimaryAddr); err == nil {
+		host = h
+	}
+	sslMode := c.cfg.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	port := c.cfg.PGPort
+	if port == 0 {
+		port = 5432
+	}
+	primaryConnInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=%s",
+		host, port, c.cfg.ReplicationUser, connInfoQuote(c.cfg.ReplicationPassword), sslMode)
 
 	var errs []error
 	for _, node := range topo.Nodes {
@@ -84,6 +128,25 @@ func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryN
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (c *Configurator) PrimaryConnInfo(addr string) string {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	sslMode := c.cfg.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	port := c.cfg.PGPort
+	if port == 0 {
+		port = 5432
+	}
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s sslmode=%s",
+		host, port, c.cfg.ReplicationUser, connInfoQuote(c.cfg.ReplicationPassword), sslMode,
+	)
 }
 
 func (c *Configurator) buildAddrMap() map[string]string {

@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zhavkk/Diploma/pkg/metrics"
 	"github.com/zhavkk/Diploma/pkg/models"
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/topology"
 )
@@ -27,18 +28,21 @@ type realClock struct{}
 func (realClock) Now() time.Time { return time.Now() }
 
 type Config struct {
-	HeartbeatTimeout int
-	PollInterval     int
+	HeartbeatTimeout    int
+	PollInterval        int
+	StartupGracePeriod  time.Duration
 }
 
 type Monitor struct {
-	cfg           Config
-	failover      FailoverNotifier
-	topo          *topology.Registry
-	clock         Clock
-	log           *zap.Logger
-	nodeStatus    map[string]*models.NodeStatus
-	rejoinHandler RejoinHandler
+	cfg              Config
+	failover         FailoverNotifier
+	topo             *topology.Registry
+	clock            Clock
+	log              *zap.Logger
+	nodeStatus       map[string]*models.NodeStatus
+	rejoinHandler    RejoinHandler
+	notifiedPrimary  string
+	startedAt        time.Time
 }
 
 func (m *Monitor) WithRejoinHandler(h RejoinHandler) {
@@ -63,6 +67,13 @@ func NewMonitorWithClock(cfg Config, fm FailoverNotifier, tr *topology.Registry,
 func (m *Monitor) ReceiveHeartbeat(status *models.NodeStatus) {
 	status.LastHeartbeat = m.clock.Now()
 	m.nodeStatus[status.NodeID] = status
+
+	metrics.HeartbeatsReceived.WithLabelValues(status.NodeID).Inc()
+
+	if m.notifiedPrimary == status.NodeID {
+		m.notifiedPrimary = ""
+	}
+
 	m.topo.UpsertNode(*status)
 	m.log.Debug("heartbeat received",
 		zap.String("node", status.NodeID),
@@ -70,7 +81,6 @@ func (m *Monitor) ReceiveHeartbeat(status *models.NodeStatus) {
 		zap.Int64("lag", status.ReplicationLag),
 	)
 	if m.rejoinHandler != nil {
-
 		if err := m.rejoinHandler.HandleOldPrimaryRejoin(context.Background(), status.NodeID, status.Address); err != nil {
 			m.log.Warn("pg_rewind rejoin failed", zap.String("node", status.NodeID), zap.Error(err))
 		}
@@ -78,6 +88,8 @@ func (m *Monitor) ReceiveHeartbeat(status *models.NodeStatus) {
 }
 
 func (m *Monitor) Run(ctx context.Context) {
+	m.startedAt = m.clock.Now()
+
 	ticker := time.NewTicker(time.Duration(m.cfg.HeartbeatTimeout) * time.Second / 2)
 	defer ticker.Stop()
 
@@ -91,10 +103,20 @@ func (m *Monitor) Run(ctx context.Context) {
 	}
 }
 
+func (m *Monitor) startupGracePeriod() time.Duration {
+	if m.cfg.StartupGracePeriod > 0 {
+		return m.cfg.StartupGracePeriod
+	}
+	return 2 * time.Duration(m.cfg.HeartbeatTimeout) * time.Second
+}
+
 func (m *Monitor) CheckNodes(ctx context.Context) {
 	threshold := time.Duration(m.cfg.HeartbeatTimeout) * time.Second
 	primary := m.topo.Primary()
 	now := m.clock.Now()
+
+	// During startup grace period, skip failover triggers.
+	inGracePeriod := !m.startedAt.IsZero() && now.Sub(m.startedAt) < m.startupGracePeriod()
 
 	var timedOut []string
 	var primaryFailed bool
@@ -112,8 +134,9 @@ func (m *Monitor) CheckNodes(ctx context.Context) {
 		}
 	}
 
-	if primaryFailed {
+	if primaryFailed && !inGracePeriod && m.notifiedPrimary != primary {
 		m.log.Error("primary node unreachable — triggering failover", zap.String("node", primary))
+		m.notifiedPrimary = primary
 		m.failover.NotifyPrimaryFailure(ctx, primary)
 	}
 

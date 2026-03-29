@@ -1,12 +1,12 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 WORKDIR /app
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/node-agent ./services/node-agent/cmd
 
 FROM alpine:3.20
 # pg_ctl и pg_rewind нужны для выполнения команд на узле
-RUN apk add --no-cache ca-certificates postgresql16-client
+RUN apk add --no-cache ca-certificates postgresql16 postgresql16-client
 COPY --from=builder /bin/node-agent /bin/node-agent
 ENTRYPOINT ["/bin/node-agent"]
