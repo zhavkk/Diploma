@@ -34,6 +34,11 @@ func (e *ExecCommander) Promote(ctx context.Context) error {
 }
 
 func (e *ExecCommander) PgRewind(ctx context.Context, sourceConnInfo string) error {
+	// pg_rewind requires the target to be shut down cleanly before rewinding.
+	if out, err := exec.CommandContext(ctx, "pg_ctl", "stop", "-D", e.pgdata, "-m", "fast", "-w").CombinedOutput(); err != nil {
+		return fmt.Errorf("pg_ctl stop before pg_rewind: %w, output: %s", err, out)
+	}
+
 	out, err := exec.CommandContext(ctx,
 		"pg_rewind",
 		"--target-pgdata="+e.pgdata,

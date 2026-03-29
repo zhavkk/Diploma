@@ -36,8 +36,9 @@ type HeartbeatReceiver interface {
 }
 
 type Config struct {
-	GRPCAddr string
-	HTTPAddr string
+	GRPCAddr    string
+	HTTPAddr    string
+	GRPCOptions []grpc.ServerOption
 }
 
 type Server struct {
@@ -68,7 +69,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	httpSrv := &http.Server{Addr: s.cfg.HTTPAddr, Handler: mux}
 
-	grpcSrv := grpc.NewServer()
+	grpcSrv := grpc.NewServer(s.cfg.GRPCOptions...)
 	orchestratorv1.RegisterOrchestratorServiceServer(grpcSrv, s)
 
 	errCh := make(chan error, 2)
@@ -174,6 +175,7 @@ func (s *Server) ReportHeartbeat(_ context.Context, req *orchestratorv1.ReportHe
 		Role:            models.NodeRole(req.Role),
 		IsInRecovery:    req.IsInRecovery,
 		WALReplayLSN:    req.WalReplayLsn,
+		WALReceiveLSN:   req.WalReceiveLsn,
 		ReplicationLag:  req.ReplicationLag,
 		PostgresRunning: req.PostgresRunning,
 		State:           state,

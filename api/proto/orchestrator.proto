@@ -87,6 +87,7 @@ message ReportHeartbeatRequest {
   int64  wal_replay_lsn   = 5;
   int64  replication_lag  = 6;
   bool   postgres_running = 7;
+  int64  wal_receive_lsn  = 8; // bytes received (may be ahead of replay on replica)
 }
 
 message ReportHeartbeatResponse {

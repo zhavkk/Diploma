@@ -8,7 +8,9 @@ import (
 	"syscall"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
+	"github.com/zhavkk/Diploma/pkg/tlsconfig"
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/api"
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/config"
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/coordination"
@@ -33,6 +35,16 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	serverTLSOpt, err := tlsconfig.ServerOption(cfg.GRPCTLSCert, cfg.GRPCTLSKey)
+	if err != nil {
+		log.Fatal("TLS server credentials", zap.Error(err))
+	}
+
+	clientTLSOpt, err := tlsconfig.ClientDialOption(cfg.GRPCTLSCACert)
+	if err != nil {
+		log.Fatal("TLS client credentials", zap.Error(err))
+	}
+
 	topoRegistry := topology.NewRegistry(log)
 
 	coordModule, err := coordination.NewModule(coordination.Config{
@@ -52,7 +64,7 @@ func main() {
 		topoRegistry.SetPrimary(primary)
 	}
 
-	nodeAgentCaller := failover.NewGRPCNodeAgentCaller()
+	nodeAgentCaller := failover.NewGRPCNodeAgentCaller(clientTLSOpt)
 	replConfigurator := replication.NewConfiguratorWithConfig(replication.Config{
 		ReplicationPassword: cfg.ReplicationPassword,
 		ReplicationUser:     cfg.ReplicationUser,
@@ -69,8 +81,9 @@ func main() {
 	}, failoverMgr, topoRegistry, log)
 
 	server := api.NewServer(api.Config{
-		GRPCAddr: cfg.GRPCAddr,
-		HTTPAddr: cfg.HTTPAddr,
+		GRPCAddr:    cfg.GRPCAddr,
+		HTTPAddr:    cfg.HTTPAddr,
+		GRPCOptions: []grpc.ServerOption{serverTLSOpt},
 	}, topoRegistry, failoverMgr, replConfigurator, healthMon, log)
 
 	healthMon.WithRejoinHandler(failoverMgr)

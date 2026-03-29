@@ -13,6 +13,7 @@ import (
 
 const defaultEtcdDialTimeout = 5 * time.Second
 
+// Config holds etcd connection and leader-election settings for the coordination module.
 type Config struct {
 	EtcdEndpoints []string
 	NodeID        string
@@ -21,12 +22,14 @@ type Config struct {
 	BackoffMin      time.Duration // defaults to 5s; set low in tests
 }
 
+// EtcdBackend abstracts etcd operations for leader election and key-value storage.
 type EtcdBackend interface {
 	Put(ctx context.Context, key, value string) error
 	Get(ctx context.Context, key string) (string, error)
 	Campaign(ctx context.Context, key, val string) (resign func(context.Context) error, sessionDone <-chan struct{}, err error)
 }
 
+// Module manages etcd-based leader election and cluster state persistence.
 type Module struct {
 	cfg          Config
 	backend      EtcdBackend
@@ -34,6 +37,7 @@ type Module struct {
 	leaderStatus atomic.Bool
 }
 
+// NewModule creates a Module backed by a real etcd cluster.
 func NewModule(cfg Config, log *zap.Logger) (*Module, error) {
 	dialTimeout := cfg.EtcdDialTimeout
 	if dialTimeout == 0 {
@@ -49,10 +53,12 @@ func NewModule(cfg Config, log *zap.Logger) (*Module, error) {
 	return &Module{cfg: cfg, backend: &etcdBackendAdapter{cli}, log: log}, nil
 }
 
+// NewModuleWithBackend creates a Module with an injectable backend, useful for testing.
 func NewModuleWithBackend(cfg Config, backend EtcdBackend, log *zap.Logger) *Module {
 	return &Module{cfg: cfg, backend: backend, log: log}
 }
 
+// Run starts the leader election loop, blocking until the context is cancelled.
 func (m *Module) Run(ctx context.Context) {
 	minBackoff := m.cfg.BackoffMin
 	if minBackoff == 0 {
@@ -104,18 +110,22 @@ func (m *Module) Run(ctx context.Context) {
 	}
 }
 
+// IsLeader reports whether this orchestrator instance currently holds the leader lock.
 func (m *Module) IsLeader(_ context.Context) (bool, error) {
 	return m.leaderStatus.Load(), nil
 }
 
+// PutClusterState writes a key-value pair under the /ha-orchestrator/state/ prefix in etcd.
 func (m *Module) PutClusterState(ctx context.Context, key, value string) error {
 	return m.backend.Put(ctx, "/ha-orchestrator/state/"+key, value)
 }
 
+// GetClusterState reads a value from the /ha-orchestrator/state/ prefix in etcd.
 func (m *Module) GetClusterState(ctx context.Context, key string) (string, error) {
 	return m.backend.Get(ctx, "/ha-orchestrator/state/"+key)
 }
 
+// Close releases the underlying etcd client resources.
 func (m *Module) Close() {
 	if c, ok := m.backend.(*etcdBackendAdapter); ok {
 		_ = c.cli.Close()

@@ -20,20 +20,26 @@ type HeartbeatSender interface {
 type GRPCSender struct {
 	orchestratorAddr string
 	dialFn           func(ctx context.Context, addr string) (net.Conn, error)
+	dialOpts         []grpc.DialOption
 	mu               sync.Mutex
 	conn             *grpc.ClientConn
 }
 
-func NewGRPCSender(orchestratorAddr string) *GRPCSender {
-	return &GRPCSender{orchestratorAddr: orchestratorAddr}
+func NewGRPCSender(orchestratorAddr string, dialOpts ...grpc.DialOption) *GRPCSender {
+	return &GRPCSender{orchestratorAddr: orchestratorAddr, dialOpts: dialOpts}
 }
 
-func NewGRPCSenderWithDialer(fn func(ctx context.Context, addr string) (net.Conn, error), orchestratorAddr string) *GRPCSender {
-	return &GRPCSender{dialFn: fn, orchestratorAddr: orchestratorAddr}
+func NewGRPCSenderWithDialer(fn func(ctx context.Context, addr string) (net.Conn, error), orchestratorAddr string, dialOpts ...grpc.DialOption) *GRPCSender {
+	return &GRPCSender{dialFn: fn, orchestratorAddr: orchestratorAddr, dialOpts: dialOpts}
 }
 
 func (s *GRPCSender) dial() (*grpc.ClientConn, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	opts := make([]grpc.DialOption, 0, len(s.dialOpts)+2)
+	if len(s.dialOpts) == 0 {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		opts = append(opts, s.dialOpts...)
+	}
 	if s.dialFn != nil {
 		opts = append(opts, grpc.WithContextDialer(s.dialFn))
 	}
@@ -63,6 +69,15 @@ func (s *GRPCSender) Close() error {
 	return nil
 }
 
+func (s *GRPCSender) resetConn() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+}
+
 func (s *GRPCSender) Send(ctx context.Context, status *models.NodeStatus) error {
 	conn, err := s.getConn()
 	if err != nil {
@@ -75,8 +90,13 @@ func (s *GRPCSender) Send(ctx context.Context, status *models.NodeStatus) error 
 		Role:            string(status.Role),
 		IsInRecovery:    status.IsInRecovery,
 		WalReplayLsn:    status.WALReplayLSN,
+		WalReceiveLsn:   status.WALReceiveLSN,
 		ReplicationLag:  status.ReplicationLag,
 		PostgresRunning: status.PostgresRunning,
 	})
-	return err
+	if err != nil {
+		s.resetConn()
+		return err
+	}
+	return nil
 }

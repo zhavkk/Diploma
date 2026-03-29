@@ -18,9 +18,12 @@ type NodeAgentConfig struct {
 	PGPassword string
 	PGSSLMode  string
 
-	PollInterval int
-	GRPCAddr     string
-	HealthAddr   string
+	PollInterval  int
+	GRPCAddr      string
+	HealthAddr    string
+	GRPCTLSCert   string
+	GRPCTLSKey    string
+	GRPCTLSCACert string
 }
 
 func LoadNodeAgent() (*NodeAgentConfig, error) {
@@ -62,6 +65,9 @@ func LoadNodeAgent() (*NodeAgentConfig, error) {
 		PollInterval:     envutil.EnvInt("POLL_INTERVAL", 5),
 		GRPCAddr:         envutil.EnvOr("GRPC_ADDR", ":50052"),
 		HealthAddr:       envutil.EnvOr("HEALTH_ADDR", ":8081"),
+		GRPCTLSCert:      envutil.EnvOr("GRPC_TLS_CERT", ""),
+		GRPCTLSKey:       envutil.EnvOr("GRPC_TLS_KEY", ""),
+		GRPCTLSCACert:    envutil.EnvOr("GRPC_TLS_CA", ""),
 	}
 	if cfg.PollInterval <= 0 {
 		return nil, fmt.Errorf("config: POLL_INTERVAL must be > 0, got %d", cfg.PollInterval)

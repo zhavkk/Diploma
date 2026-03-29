@@ -12,6 +12,7 @@ import (
 	"github.com/zhavkk/Diploma/pkg/models"
 )
 
+// PGStatusClient queries the local PostgreSQL instance for health and replication status.
 type PGStatusClient interface {
 	IsInRecovery(ctx context.Context) (bool, error)
 	WALReplayLSN(ctx context.Context) (int64, error)
@@ -34,12 +35,15 @@ type ReplicationStat struct {
 	ReplayLag       int64
 }
 
+// Config holds probe settings including node identity and polling interval.
 type Config struct {
 	NodeID       string
 	NodeAddr     string
 	PollInterval int
 }
 
+// Probe periodically collects PostgreSQL status and sends heartbeats to the orchestrator.
+// It is safe for concurrent use.
 type Probe struct {
 	cfg     Config
 	pg      PGStatusClient
@@ -50,6 +54,7 @@ type Probe struct {
 	latest  *models.NodeStatus
 }
 
+// New creates a Probe that polls the given PostgreSQL client.
 func New(cfg Config, pg PGStatusClient, log *zap.Logger) *Probe {
 	p := &Probe{cfg: cfg, pg: pg, log: log}
 	if p.cfg.PollInterval <= 0 {
@@ -58,14 +63,17 @@ func New(cfg Config, pg PGStatusClient, log *zap.Logger) *Probe {
 	return p
 }
 
+// WithSender sets the heartbeat sender used to report status to the orchestrator.
 func (p *Probe) WithSender(s HeartbeatSender) {
 	p.sender = s
 }
 
+// WithWatcher sets the replication watcher used to enrich heartbeat data with replication stats.
 func (p *Probe) WithWatcher(w ReplicationWatcher) {
 	p.watcher = w
 }
 
+// Run starts the probe loop, collecting status and sending heartbeats until the context is cancelled.
 func (p *Probe) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(p.cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
@@ -99,6 +107,7 @@ func (p *Probe) Run(ctx context.Context) {
 	}
 }
 
+// MarkPostgresDown updates the latest status to indicate PostgreSQL is not running.
 func (p *Probe) MarkPostgresDown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -111,12 +120,14 @@ func (p *Probe) MarkPostgresDown() {
 	p.latest = &down
 }
 
+// Latest returns the most recently collected node status, or nil if no collection has occurred.
 func (p *Probe) Latest() *models.NodeStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.latest
 }
 
+// Collect queries the local PostgreSQL instance and returns its current status.
 func (p *Probe) Collect(ctx context.Context) (*models.NodeStatus, error) {
 	start := time.Now()
 	defer func() {

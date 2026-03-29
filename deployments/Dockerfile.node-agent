@@ -8,5 +8,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/node-agent ./services/node-agent/c
 FROM alpine:3.20
 # pg_ctl и pg_rewind нужны для выполнения команд на узле
 RUN apk add --no-cache ca-certificates postgresql16 postgresql16-client
+# Add PostgreSQL bin dir to PATH so pg_ctl, pg_rewind, pg_basebackup are found
+ENV PATH="/usr/lib/postgresql16/bin:${PATH}"
 COPY --from=builder /bin/node-agent /bin/node-agent
 ENTRYPOINT ["/bin/node-agent"]

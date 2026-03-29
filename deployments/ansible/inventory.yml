@@ -4,7 +4,10 @@ all:
     ansible_ssh_private_key_file: ~/.ssh/id_rsa
     pg_version: 16
     pg_user: postgres
-    pg_password: "{{ vault_pg_password }}"  
+    # In production, replace with vault: pg_password: "{{ vault_pg_password }}"
+    pg_password: "postgres"
+    replication_user: replicator
+    replication_password: replicator
     orchestrator_addr: "{{ hostvars['orchestrator']['ansible_host'] }}:50051"
 
   children:
@@ -25,7 +28,7 @@ all:
           pg_port: 5432
           node_agent_http_port: 8081
           node_agent_grpc_port: 50052
-          replication_type: sync    
+          replication_type: sync
 
         pg-replica2:
           ansible_host: 192.168.1.12
@@ -34,7 +37,7 @@ all:
           pg_port: 5432
           node_agent_http_port: 8081
           node_agent_grpc_port: 50052
-          replication_type: async  
+          replication_type: async
 
     etcd_nodes:
       hosts:
@@ -51,7 +54,6 @@ all:
           etcd_peer_port: 2380
           etcd_client_port: 2379
 
-
     orchestrator:
       hosts:
         orchestrator:
@@ -59,11 +61,13 @@ all:
           node_id: orchestrator-1
           grpc_port: 50051
           http_port: 8080
+          heartbeat_timeout: 10
+          quorum_size: 1
 
     haproxy:
       hosts:
         haproxy:
           ansible_host: 192.168.1.40
-          write_port: 5000   
-          read_port: 5001    
+          write_port: 5000
+          read_port: 5001
           stats_port: 7000

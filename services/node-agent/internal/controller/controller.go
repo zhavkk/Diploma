@@ -17,9 +17,10 @@ type NodeStatusProvider interface {
 }
 
 type Config struct {
-	NodeID   string
-	PGData   string
-	GRPCAddr string
+	NodeID      string
+	PGData      string
+	GRPCAddr    string
+	GRPCOptions []grpc.ServerOption
 }
 
 type Controller struct {
@@ -36,7 +37,7 @@ func New(cfg Config, commander PGCommander, statusProv NodeStatusProvider, log *
 	return &Controller{
 		cfg:        cfg,
 		log:        log,
-		grpcSrv:    grpc.NewServer(),
+		grpcSrv:    grpc.NewServer(cfg.GRPCOptions...),
 		commander:  commander,
 		statusProv: statusProv,
 	}

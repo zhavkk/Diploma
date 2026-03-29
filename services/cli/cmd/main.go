@@ -12,17 +12,24 @@ import (
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	orchestratorv1 "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1"
+	"github.com/zhavkk/Diploma/pkg/tlsconfig"
 )
 
-var orchestratorAddr string
+var (
+	orchestratorAddr string
+	tlsCAFlag        string
+)
 
 var testDialFn func(ctx context.Context, addr string) (net.Conn, error)
 
 func dial(addr string) (*grpc.ClientConn, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	tlsOpt, err := tlsconfig.ClientDialOption(tlsCAFlag)
+	if err != nil {
+		return nil, fmt.Errorf("tls credentials: %w", err)
+	}
+	opts := []grpc.DialOption{tlsOpt}
 	if testDialFn != nil {
 		opts = append(opts, grpc.WithContextDialer(testDialFn))
 	}
@@ -37,6 +44,8 @@ func main() {
 
 	root.PersistentFlags().StringVar(&orchestratorAddr, "addr", "localhost:50051",
 		"Адрес gRPC API оркестратора (HTTP-порт выводится автоматически)")
+	root.PersistentFlags().StringVar(&tlsCAFlag, "tls-ca", "",
+		"Path to CA certificate for TLS (empty = insecure)")
 
 	root.AddCommand(
 		newCmdStatus(),

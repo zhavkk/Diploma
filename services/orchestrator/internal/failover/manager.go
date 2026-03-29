@@ -18,25 +18,31 @@ type ReplicationConfigurator interface {
 	PrimaryConnInfo(addr string) string
 }
 
+// Config holds failover manager settings such as the required quorum size.
 type Config struct {
 	QuorumSize int
 }
 
+// TopologyRegistry provides access to the cluster topology for failover decisions.
 type TopologyRegistry interface {
 	Primary() string
 	SetPrimary(nodeID string)
 	Get() *models.ClusterTopology
 }
 
+// CoordinationModule abstracts etcd-based leader election and cluster state persistence.
 type CoordinationModule interface {
 	IsLeader(ctx context.Context) (bool, error)
 	PutClusterState(ctx context.Context, key, value string) error
 }
 
+// EventAppender records failover events for audit and observability.
 type EventAppender interface {
 	AppendEvent(evt models.FailoverEvent)
 }
 
+// Manager orchestrates automatic and manual failover of the PostgreSQL primary.
+// It is safe for concurrent use.
 type Manager struct {
 	cfg        Config
 	topo       TopologyRegistry
@@ -54,6 +60,7 @@ type Manager struct {
 	newPrimaryConnInfo string
 }
 
+// NewManager creates a new failover Manager with the given dependencies.
 func NewManager(
 	cfg Config,
 	topo TopologyRegistry,
@@ -72,20 +79,24 @@ func NewManager(
 	}
 }
 
+// WithEventStore sets the event store used to record failover events.
 func (m *Manager) WithEventStore(e EventAppender) {
 	m.eventStore = e
 }
 
+// Run blocks until the context is cancelled. The Manager reacts to failover notifications rather than polling.
 func (m *Manager) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// IsFailoverInProgress reports whether a failover operation is currently running.
 func (m *Manager) IsFailoverInProgress() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.failoverInProgress
 }
 
+// NotifyPrimaryFailure triggers an automatic failover after the given primary node is detected as failed.
 func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string) {
 	m.mu.Lock()
 	if m.failoverInProgress {
@@ -196,12 +207,14 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	}
 }
 
+// NeedsRejoin reports whether the given node is a former primary that needs pg_rewind to rejoin the cluster.
 func (m *Manager) NeedsRejoin(nodeID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.oldPrimaryID == nodeID && !m.rewindInProgress
 }
 
+// HandleOldPrimaryRejoin runs pg_rewind and reconfigures the old primary to rejoin the cluster as a replica.
 func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr string) error {
 	m.mu.Lock()
 	if m.oldPrimaryID != nodeID {
@@ -266,6 +279,7 @@ func (m *Manager) countHealthyReplicas(excludeNodeID string) int {
 	return count
 }
 
+// ElectNewPrimary selects the healthy replica with the highest WAL replay LSN, excluding the given node.
 func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 	topo := m.topo.Get()
 	if topo == nil {
@@ -284,7 +298,19 @@ func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 		if node.Role != models.RoleReplica {
 			continue
 		}
-		if best == nil || node.WALReplayLSN > best.WALReplayLSN {
+		// Use the furthest-ahead LSN: received bytes may be ahead of replayed bytes.
+		nodeLSN := node.WALReplayLSN
+		if node.WALReceiveLSN > nodeLSN {
+			nodeLSN = node.WALReceiveLSN
+		}
+		bestLSN := int64(0)
+		if best != nil {
+			bestLSN = best.WALReplayLSN
+			if best.WALReceiveLSN > bestLSN {
+				bestLSN = best.WALReceiveLSN
+			}
+		}
+		if best == nil || nodeLSN > bestLSN {
 			best = node
 		}
 	}
@@ -295,6 +321,7 @@ func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 	return best.NodeID
 }
 
+// TriggerManualFailover promotes the specified target node to primary, demoting the current primary.
 func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string) error {
 	m.log.Info("manual failover requested", zap.String("target", targetNodeID))
 

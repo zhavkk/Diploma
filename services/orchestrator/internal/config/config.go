@@ -7,15 +7,18 @@ import (
 )
 
 type OrchestratorConfig struct {
-	NodeID               string
-	GRPCAddr             string
-	HTTPAddr             string
-	HeartbeatTimeout     int
-	QuorumSize           int
-	EtcdEndpoints        []string
-	ReplicationPassword  string
-	ReplicationUser      string
-	ReplicationPGPort    int
+	NodeID              string
+	GRPCAddr            string
+	HTTPAddr            string
+	HeartbeatTimeout    int
+	QuorumSize          int
+	EtcdEndpoints       []string
+	ReplicationPassword string
+	ReplicationUser     string
+	ReplicationPGPort   int
+	GRPCTLSCert         string
+	GRPCTLSKey          string
+	GRPCTLSCACert       string
 }
 
 func LoadOrchestrator() (*OrchestratorConfig, error) {
@@ -34,6 +37,9 @@ func LoadOrchestrator() (*OrchestratorConfig, error) {
 		ReplicationPassword: envutil.EnvOr("REPLICATION_PASSWORD", "replicator"),
 		ReplicationUser:     envutil.EnvOr("REPLICATION_USER", "replicator"),
 		ReplicationPGPort:   envutil.EnvInt("REPLICATION_PG_PORT", 5432),
+		GRPCTLSCert:         envutil.EnvOr("GRPC_TLS_CERT", ""),
+		GRPCTLSKey:          envutil.EnvOr("GRPC_TLS_KEY", ""),
+		GRPCTLSCACert:       envutil.EnvOr("GRPC_TLS_CA", ""),
 	}
 	if cfg.HeartbeatTimeout <= 0 {
 		return nil, fmt.Errorf("config: HEARTBEAT_TIMEOUT must be > 0, got %d", cfg.HeartbeatTimeout)

@@ -53,4 +53,4 @@ else
 fi
 
 # Hand off to the official postgres docker entrypoint (will start postgres normally)
-exec docker-entrypoint.sh postgres
+exec /usr/local/bin/docker-entrypoint.sh postgres

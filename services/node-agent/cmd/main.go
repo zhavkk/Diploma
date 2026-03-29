@@ -9,8 +9,10 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
 
 	"github.com/zhavkk/Diploma/pkg/pgclient"
+	"github.com/zhavkk/Diploma/pkg/tlsconfig"
 	"github.com/zhavkk/Diploma/services/node-agent/internal/config"
 	"github.com/zhavkk/Diploma/services/node-agent/internal/controller"
 	"github.com/zhavkk/Diploma/services/node-agent/internal/health"
@@ -30,6 +32,16 @@ func main() {
 		log.Fatal("config load failed", zap.Error(err))
 	}
 
+	serverTLSOpt, err := tlsconfig.ServerOption(cfg.GRPCTLSCert, cfg.GRPCTLSKey)
+	if err != nil {
+		log.Fatal("TLS server credentials", zap.Error(err))
+	}
+
+	clientTLSOpt, err := tlsconfig.ClientDialOption(cfg.GRPCTLSCACert)
+	if err != nil {
+		log.Fatal("TLS client credentials", zap.Error(err))
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -46,7 +58,7 @@ func main() {
 	}
 	defer pg.Close()
 
-	sender := probe.NewGRPCSender(cfg.OrchestratorAddr)
+	sender := probe.NewGRPCSender(cfg.OrchestratorAddr, clientTLSOpt)
 	defer sender.Close()
 
 	replWatcher := watcher.New(watcher.Config{
@@ -64,9 +76,10 @@ func main() {
 	dbProbe.WithWatcher(&watcherAdapter{w: replWatcher})
 
 	nodeController := controller.New(controller.Config{
-		NodeID:   cfg.NodeID,
-		PGData:   cfg.PGData,
-		GRPCAddr: cfg.GRPCAddr,
+		NodeID:      cfg.NodeID,
+		PGData:      cfg.PGData,
+		GRPCAddr:    cfg.GRPCAddr,
+		GRPCOptions: []grpc.ServerOption{serverTLSOpt},
 	}, controller.NewExecCommander(cfg.PGData), dbProbe, log)
 
 	healthSrv := health.NewServer(health.Config{

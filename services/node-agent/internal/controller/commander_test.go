@@ -128,20 +128,19 @@ func TestExecCommander_PgRewind_CreatesStandbySignal(t *testing.T) {
 
 	pgdata := t.TempDir()
 
-	// Build a helper binary that pretends to be pg_rewind and succeeds.
+	// Build a no-op helper binary that pretends to be pg_ctl and pg_rewind (exits 0).
 	helperDir := t.TempDir()
-	helperBin := filepath.Join(helperDir, "pg_rewind")
-	//nolint:gosec
-	buildCmd := exec.Command("go", "build", "-o", helperBin, "-ldflags", "-s -w")
-	// We compile a tiny Go program that exits 0.
 	srcFile := filepath.Join(helperDir, "main.go")
 	if err := os.WriteFile(srcFile, []byte(`package main; func main() {}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	buildCmd.Dir = helperDir
-	buildCmd.Args = []string{"go", "build", "-o", helperBin, srcFile}
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("failed to build mock pg_rewind: %v\n%s", err, out)
+	for _, bin := range []string{"pg_ctl", "pg_rewind"} {
+		helperBin := filepath.Join(helperDir, bin)
+		buildCmd := exec.Command("go", "build", "-o", helperBin, srcFile)
+		buildCmd.Dir = helperDir
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to build mock %s: %v\n%s", bin, err, out)
+		}
 	}
 
 	// Put our mock binary first on PATH so exec.CommandContext finds it.

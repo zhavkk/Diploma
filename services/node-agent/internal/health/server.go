@@ -10,25 +10,30 @@ import (
 	"github.com/zhavkk/Diploma/pkg/models"
 )
 
+// Config holds the HTTP listen address and node identity for the health server.
 type Config struct {
 	Addr   string
 	NodeID string
 }
 
+// StatusProvider returns the latest known status of the local PostgreSQL instance.
 type StatusProvider interface {
 	Latest() *models.NodeStatus
 }
 
+// Server exposes HTTP health endpoints used by HAProxy for backend selection.
 type Server struct {
 	cfg   Config
 	probe StatusProvider
 	log   *zap.Logger
 }
 
+// NewServer creates a new health HTTP server.
 func NewServer(cfg Config, p StatusProvider, log *zap.Logger) *Server {
 	return &Server{cfg: cfg, probe: p, log: log}
 }
 
+// Run starts the HTTP server and blocks until the context is cancelled.
 func (s *Server) Run(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health/primary", s.HandlePrimary)
@@ -49,6 +54,7 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
+// HandlePrimary returns 200 if the local PostgreSQL is running as primary, 503 otherwise.
 func (s *Server) HandlePrimary(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
 	if status == nil || !status.PostgresRunning || status.IsInRecovery {
@@ -59,6 +65,7 @@ func (s *Server) HandlePrimary(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("primary"))
 }
 
+// HandleReplica returns 200 if the local PostgreSQL is running as a replica, 503 otherwise.
 func (s *Server) HandleReplica(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
 	if status == nil || !status.PostgresRunning || !status.IsInRecovery {
@@ -69,6 +76,7 @@ func (s *Server) HandleReplica(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("replica"))
 }
 
+// HandleAlive returns 200 if PostgreSQL is running regardless of role, 503 otherwise.
 func (s *Server) HandleAlive(w http.ResponseWriter, _ *http.Request) {
 	status := s.probe.Latest()
 	if status == nil || !status.PostgresRunning {

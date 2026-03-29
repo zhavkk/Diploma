@@ -12,14 +12,17 @@ import (
 	"github.com/zhavkk/Diploma/pkg/models"
 )
 
+// TopologySource provides read access to the current cluster topology.
 type TopologySource interface {
 	Get() *models.ClusterTopology
 }
 
+// NodeAgentCaller sends replication reconfiguration commands to node agents via gRPC.
 type NodeAgentCaller interface {
 	ReconfigureReplication(ctx context.Context, nodeAddr, primaryConnInfo, timeline string) error
 }
 
+// Config holds PostgreSQL replication connection parameters.
 type Config struct {
 	ReplicationPassword string
 	ReplicationUser     string // defaults to "replicator"
@@ -33,6 +36,7 @@ func connInfoQuote(s string) string {
 	return "'" + s + "'"
 }
 
+// Configurator manages replication settings across cluster replicas after topology changes.
 type Configurator struct {
 	cfg    Config
 	topo   TopologySource
@@ -40,6 +44,7 @@ type Configurator struct {
 	log    *zap.Logger
 }
 
+// NewConfigurator creates a Configurator with default replication connection settings.
 func NewConfigurator(topo TopologySource, caller NodeAgentCaller, log *zap.Logger) *Configurator {
 	return &Configurator{
 		cfg:    Config{SSLMode: "disable", ReplicationUser: "replicator"},
@@ -49,6 +54,7 @@ func NewConfigurator(topo TopologySource, caller NodeAgentCaller, log *zap.Logge
 	}
 }
 
+// NewConfiguratorWithConfig creates a Configurator with explicit replication connection settings.
 func NewConfiguratorWithConfig(cfg Config, topo TopologySource, caller NodeAgentCaller, log *zap.Logger) *Configurator {
 	if cfg.SSLMode == "" {
 		cfg.SSLMode = "disable"
@@ -59,6 +65,7 @@ func NewConfiguratorWithConfig(cfg Config, topo TopologySource, caller NodeAgent
 	return &Configurator{cfg: cfg, topo: topo, caller: caller, log: log}
 }
 
+// Apply sends the given replication configuration to each of the specified target nodes.
 func (c *Configurator) Apply(ctx context.Context, cfg models.ReplicationConfig, targetNodes []string) error {
 	c.log.Info("applying replication config",
 		zap.String("synchronous_standby_names", cfg.SynchronousStandbyNames),
@@ -81,6 +88,7 @@ func (c *Configurator) Apply(ctx context.Context, cfg models.ReplicationConfig, 
 	return nil
 }
 
+// ReconfigureAfterFailover updates all replicas to stream from the new primary after a failover.
 func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryNodeID string) error {
 	c.log.Info("reconfiguring replication after failover", zap.String("new_primary", newPrimaryNodeID))
 
@@ -107,7 +115,7 @@ func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryN
 		port = 5432
 	}
 	primaryConnInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=%s",
-		host, port, c.cfg.ReplicationUser, connInfoQuote(c.cfg.ReplicationPassword), sslMode)
+		host, port, connInfoQuote(c.cfg.ReplicationUser), connInfoQuote(c.cfg.ReplicationPassword), sslMode)
 
 	var errs []error
 	for _, node := range topo.Nodes {
@@ -130,6 +138,7 @@ func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryN
 	return errors.Join(errs...)
 }
 
+// PrimaryConnInfo builds a libpq-compatible connection string for the primary at the given address.
 func (c *Configurator) PrimaryConnInfo(addr string) string {
 	host := addr
 	if h, _, err := net.SplitHostPort(addr); err == nil {
@@ -145,7 +154,7 @@ func (c *Configurator) PrimaryConnInfo(addr string) string {
 	}
 	return fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s sslmode=%s",
-		host, port, c.cfg.ReplicationUser, connInfoQuote(c.cfg.ReplicationPassword), sslMode,
+		host, port, connInfoQuote(c.cfg.ReplicationUser), connInfoQuote(c.cfg.ReplicationPassword), sslMode,
 	)
 }
 

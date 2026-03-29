@@ -83,8 +83,16 @@ services:
     depends_on:
       pg-primary:
         condition: service_healthy
+      orchestrator:
+        condition: service_healthy
     ports:
       - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health/alive || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # ─────────────────────────────────────────
   # PostgreSQL Replica 1 (синхронная)
@@ -137,8 +145,16 @@ services:
     depends_on:
       pg-replica1:
         condition: service_healthy
+      orchestrator:
+        condition: service_healthy
     ports:
       - "8082:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health/alive || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # ─────────────────────────────────────────
   # PostgreSQL Replica 2 (асинхронная)
@@ -191,8 +207,16 @@ services:
     depends_on:
       pg-replica2:
         condition: service_healthy
+      orchestrator:
+        condition: service_healthy
     ports:
       - "8083:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health/alive || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # ─────────────────────────────────────────
   # HA Orchestrator (Control Plane)
@@ -208,6 +232,8 @@ services:
       HEARTBEAT_TIMEOUT: "10"
       QUORUM_SIZE: "1"
       ETCD_ENDPOINTS: "etcd:2379"
+      REPLICATION_USER: "replicator"
+      REPLICATION_PASSWORD: "replicator"
     networks:
       - ha-net
     depends_on:
@@ -215,6 +241,12 @@ services:
     ports:
       - "50051:50051"
       - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   # ─────────────────────────────────────────
   # HAProxy — load balancer

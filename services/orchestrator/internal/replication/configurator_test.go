@@ -313,8 +313,8 @@ func TestConfigurator_PrimaryConnInfo_UsesConfiguredUser(t *testing.T) {
 		PGPort:              5432,
 	}, nil, nil, zap.NewNop())
 	got := c.PrimaryConnInfo("pg-primary:50052")
-	if !strings.Contains(got, "user=custom_user") {
-		t.Errorf("PrimaryConnInfo = %q, expected user=custom_user", got)
+	if !strings.Contains(got, "user='custom_user'") {
+		t.Errorf("PrimaryConnInfo = %q, expected user='custom_user'", got)
 	}
 }
 
@@ -325,8 +325,8 @@ func TestConfigurator_PrimaryConnInfo_DefaultUserIsReplicator(t *testing.T) {
 		PGPort:              5432,
 	}, nil, nil, zap.NewNop())
 	got := c.PrimaryConnInfo("pg-primary:50052")
-	if !strings.Contains(got, "user=replicator") {
-		t.Errorf("PrimaryConnInfo = %q, expected user=replicator (default)", got)
+	if !strings.Contains(got, "user='replicator'") {
+		t.Errorf("PrimaryConnInfo = %q, expected user='replicator' (default)", got)
 	}
 }
 

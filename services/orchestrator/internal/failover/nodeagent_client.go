@@ -17,6 +17,7 @@ const (
 	defaultRetryBaseWait = 100 * time.Millisecond
 )
 
+// NodeAgentCaller sends gRPC commands to node agents for promotion, replication, rewind, and restart.
 type NodeAgentCaller interface {
 	PromoteNode(ctx context.Context, nodeAddr string) error
 	ReconfigureReplication(ctx context.Context, nodeAddr, primaryConnInfo, timeline string) error
@@ -24,20 +25,29 @@ type NodeAgentCaller interface {
 	RestartPostgres(ctx context.Context, nodeAddr string) error
 }
 
+// GRPCNodeAgentCaller implements NodeAgentCaller using gRPC with automatic retries.
 type GRPCNodeAgentCaller struct {
-	dialFn func(ctx context.Context, addr string) (net.Conn, error)
+	dialFn   func(ctx context.Context, addr string) (net.Conn, error)
+	dialOpts []grpc.DialOption
 }
 
-func NewGRPCNodeAgentCaller() *GRPCNodeAgentCaller {
-	return &GRPCNodeAgentCaller{}
+// NewGRPCNodeAgentCaller creates a GRPCNodeAgentCaller with optional gRPC dial options.
+func NewGRPCNodeAgentCaller(dialOpts ...grpc.DialOption) *GRPCNodeAgentCaller {
+	return &GRPCNodeAgentCaller{dialOpts: dialOpts}
 }
 
-func NewGRPCNodeAgentCallerWithDialer(fn func(ctx context.Context, addr string) (net.Conn, error)) *GRPCNodeAgentCaller {
-	return &GRPCNodeAgentCaller{dialFn: fn}
+// NewGRPCNodeAgentCallerWithDialer creates a GRPCNodeAgentCaller with a custom dialer, useful for testing.
+func NewGRPCNodeAgentCallerWithDialer(fn func(ctx context.Context, addr string) (net.Conn, error), dialOpts ...grpc.DialOption) *GRPCNodeAgentCaller {
+	return &GRPCNodeAgentCaller{dialFn: fn, dialOpts: dialOpts}
 }
 
 func (c *GRPCNodeAgentCaller) dial(addr string) (*grpc.ClientConn, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	opts := make([]grpc.DialOption, 0, len(c.dialOpts)+2)
+	if len(c.dialOpts) == 0 {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		opts = append(opts, c.dialOpts...)
+	}
 	if c.dialFn != nil {
 		opts = append(opts, grpc.WithContextDialer(c.dialFn))
 	}
@@ -63,6 +73,7 @@ func withRetry(ctx context.Context, maxRetries int, base time.Duration, fn func(
 	return lastErr
 }
 
+// PromoteNode sends a promote request to the node agent at the given address.
 func (c *GRPCNodeAgentCaller) PromoteNode(ctx context.Context, nodeAddr string) error {
 	return withRetry(ctx, defaultMaxRetries, defaultRetryBaseWait, func() error {
 		conn, err := c.dial(nodeAddr)
@@ -82,6 +93,7 @@ func (c *GRPCNodeAgentCaller) PromoteNode(ctx context.Context, nodeAddr string) 
 	})
 }
 
+// ReconfigureReplication sends a replication reconfiguration request to the node agent at the given address.
 func (c *GRPCNodeAgentCaller) ReconfigureReplication(ctx context.Context, nodeAddr, primaryConnInfo, timeline string) error {
 	return withRetry(ctx, defaultMaxRetries, defaultRetryBaseWait, func() error {
 		conn, err := c.dial(nodeAddr)
@@ -104,6 +116,7 @@ func (c *GRPCNodeAgentCaller) ReconfigureReplication(ctx context.Context, nodeAd
 	})
 }
 
+// RunPgRewind sends a pg_rewind request to the node agent at the given address.
 func (c *GRPCNodeAgentCaller) RunPgRewind(ctx context.Context, nodeAddr, sourceConnInfo string) error {
 	return withRetry(ctx, defaultMaxRetries, defaultRetryBaseWait, func() error {
 		conn, err := c.dial(nodeAddr)
@@ -125,6 +138,7 @@ func (c *GRPCNodeAgentCaller) RunPgRewind(ctx context.Context, nodeAddr, sourceC
 	})
 }
 
+// RestartPostgres sends a PostgreSQL restart request to the node agent at the given address.
 func (c *GRPCNodeAgentCaller) RestartPostgres(ctx context.Context, nodeAddr string) error {
 	return withRetry(ctx, defaultMaxRetries, defaultRetryBaseWait, func() error {
 		conn, err := c.dial(nodeAddr)
