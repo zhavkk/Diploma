@@ -75,6 +75,7 @@ services:
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
+      POLL_INTERVAL: "2"
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
       # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
@@ -143,6 +144,7 @@ services:
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
+      POLL_INTERVAL: "2"
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
       # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
@@ -211,6 +213,7 @@ services:
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
+      POLL_INTERVAL: "2"
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
       # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
@@ -247,7 +250,7 @@ services:
       NODE_ID: "orchestrator-1"
       GRPC_ADDR: ":50051"
       HTTP_ADDR: ":8080"
-      HEARTBEAT_TIMEOUT: "10"
+      HEARTBEAT_TIMEOUT: "6"
       QUORUM_SIZE: "1"
       ETCD_ENDPOINTS: "etcd:2379"
       REPLICATION_USER: "replicator"
@@ -284,6 +287,27 @@ services:
       - "5000:5000"
       - "5001:5001"
       - "7000:7000"
+
+  # ─────────────────────────────────────────
+  # Log writer — simple client workload via HAProxy write endpoint
+  # ─────────────────────────────────────────
+  log-writer:
+    image: postgres:16
+    environment:
+      PGHOST: haproxy
+      PGPORT: "5000"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      PGCONNECT_TIMEOUT: "1"
+    volumes:
+      - ./scripts/log-writer.sh:/usr/local/bin/log-writer.sh:ro
+    entrypoint: ["/bin/bash", "/usr/local/bin/log-writer.sh"]
+    networks:
+      - ha-net
+    depends_on:
+      - haproxy
+    restart: unless-stopped
 
   # ─────────────────────────────────────────
   # Prometheus — metrics collection
