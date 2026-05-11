@@ -42,23 +42,42 @@ func main() {
 		log.Fatal("TLS client credentials", zap.Error(err))
 	}
 
+	// Validate TLS certificates on startup
+	if cfg.GRPCTLSCert != "" || cfg.GRPCTLSCACert != "" {
+		result, err := tlsconfig.ValidateCertificates(cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
+		if err != nil {
+			log.Fatal("TLS certificate validation failed", zap.Error(err))
+		}
+		tlsconfig.LogValidationResults(log, result)
+
+		// Reject startup if any certificate is expired
+		if len(result.Expired) > 0 {
+			log.Fatal("cannot start: TLS certificates are expired",
+				zap.Int("expired_count", len(result.Expired)),
+			)
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	pg, err := pgclient.New(ctx, pgclient.Config{
-		Host:     cfg.PGHost,
-		Port:     cfg.PGPort,
-		User:     cfg.PGUser,
-		Password: cfg.PGPassword,
-		DBName:   "postgres",
-		SSLMode:  cfg.PGSSLMode,
+		Host:            cfg.PGHost,
+		Port:            cfg.PGPort,
+		User:            cfg.PGUser,
+		Password:        cfg.PGPassword,
+		DBName:          "postgres",
+		SSLMode:         cfg.PGSSLMode,
+		MaxOpenConns:    cfg.PGMaxOpenConns,
+		MaxIdleConns:    cfg.PGMaxIdleConns,
+		ConnMaxLifetime: cfg.PGConnMaxLifetime,
 	}, log)
 	if err != nil {
 		log.Fatal("postgres connect failed", zap.Error(err))
 	}
 	defer pg.Close()
 
-	sender := probe.NewGRPCSender(cfg.OrchestratorAddr, clientTLSOpt)
+	sender := probe.NewGRPCSender(cfg.OrchestratorAddr, clientTLSOpt).WithLogger(log)
 	defer sender.Close()
 
 	replWatcher := watcher.New(watcher.Config{
@@ -76,24 +95,58 @@ func main() {
 	dbProbe.WithWatcher(&watcherAdapter{w: replWatcher})
 
 	nodeController := controller.New(controller.Config{
-		NodeID:      cfg.NodeID,
-		PGData:      cfg.PGData,
-		GRPCAddr:    cfg.GRPCAddr,
-		GRPCOptions: []grpc.ServerOption{serverTLSOpt},
-	}, controller.NewExecCommander(cfg.PGData), dbProbe, log)
+		NodeID:             cfg.NodeID,
+		PGData:             cfg.PGData,
+		GRPCAddr:           cfg.GRPCAddr,
+		GRPCOptions:        []grpc.ServerOption{serverTLSOpt},
+		PgRewindRetryDelay: cfg.PgRewindRetryDelay,
+	}, controller.NewExecCommanderWithRetryDelay(cfg.PGData, cfg.PgRewindRetryDelay), dbProbe, log)
 
 	healthSrv := health.NewServer(health.Config{
 		Addr:   cfg.HealthAddr,
 		NodeID: cfg.NodeID,
 	}, dbProbe, log)
 
+	// Start periodic certificate validation monitoring
+	tlsconfig.StartPeriodicValidation(ctx, log, cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
+
 	log.Info("node-agent started", zap.String("node_id", cfg.NodeID))
+	log.Info("preparing to start goroutines")
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.Go(func() error { dbProbe.Run(gCtx); return nil })
-	g.Go(func() error { replWatcher.Run(gCtx); return nil })
-	g.Go(func() error { return nodeController.Run(gCtx) })
-	g.Go(func() error { healthSrv.Run(gCtx); return nil })
+
+	log.Info("creating probe goroutine")
+	g.Go(func() error {
+		log.Info("starting probe loop")
+		defer log.Info("probe loop exited")
+		dbProbe.Run(gCtx)
+		return nil
+	})
+
+	log.Info("creating watcher goroutine")
+	g.Go(func() error {
+		log.Info("starting replication watcher")
+		defer log.Info("replication watcher exited")
+		replWatcher.Run(gCtx)
+		return nil
+	})
+
+	log.Info("creating controller goroutine")
+	g.Go(func() error {
+		log.Info("starting node controller")
+		defer log.Info("node controller exited")
+		return nodeController.Run(gCtx)
+	})
+
+	log.Info("creating health server goroutine")
+	g.Go(func() error {
+		log.Info("starting health server")
+		defer log.Info("health server exited")
+		healthSrv.Run(gCtx)
+		return nil
+	})
+
+	log.Info("all goroutines created, waiting for context")
 
 	if err := g.Wait(); err != nil {
 		log.Error("node-agent component failed", zap.Error(err))

@@ -12,6 +12,8 @@ volumes:
   pg-replica1-data:
   pg-replica2-data:
   etcd-data:
+  prometheus-data:
+  grafana-data:
 
 services:
 
@@ -19,13 +21,13 @@ services:
   # etcd — distributed coordination
   # ─────────────────────────────────────────
   etcd:
-    image: bitnami/etcd:3.5
+    image: quay.io/coreos/etcd:v3.5.16
     environment:
-      ALLOW_NONE_AUTHENTICATION: "yes"
       ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
       ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+      ETCD_NAME: "etcd0"
     volumes:
-      - etcd-data:/bitnami/etcd
+      - etcd-data:/etcd-data
     networks:
       - ha-net
     ports:
@@ -75,6 +77,10 @@ services:
       PGDATA: /var/lib/postgresql/data
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
+      # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
+      # PG_MAX_OPEN_CONNS: "25"
+      # PG_MAX_IDLE_CONNS: "5"
+      # PG_CONN_MAX_LIFETIME: "5m"
     volumes:
       - pg-primary-data:/var/lib/postgresql/data
     pid: "service:pg-primary"
@@ -108,6 +114,8 @@ services:
     volumes:
       - pg-replica1-data:/var/lib/postgresql/data
       - ./scripts/replica-setup.sh:/replica-setup.sh
+      - ./configs/pg-replica1/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     entrypoint: ["/bin/bash", "/replica-setup.sh"]
     networks:
       - ha-net
@@ -137,6 +145,10 @@ services:
       PGDATA: /var/lib/postgresql/data
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
+      # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
+      # PG_MAX_OPEN_CONNS: "25"
+      # PG_MAX_IDLE_CONNS: "5"
+      # PG_CONN_MAX_LIFETIME: "5m"
     volumes:
       - pg-replica1-data:/var/lib/postgresql/data
     pid: "service:pg-replica1"
@@ -170,6 +182,8 @@ services:
     volumes:
       - pg-replica2-data:/var/lib/postgresql/data
       - ./scripts/replica-setup.sh:/replica-setup.sh
+      - ./configs/pg-replica2/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     entrypoint: ["/bin/bash", "/replica-setup.sh"]
     networks:
       - ha-net
@@ -199,6 +213,10 @@ services:
       PGDATA: /var/lib/postgresql/data
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
+      # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
+      # PG_MAX_OPEN_CONNS: "25"
+      # PG_MAX_IDLE_CONNS: "5"
+      # PG_CONN_MAX_LIFETIME: "5m"
     volumes:
       - pg-replica2-data:/var/lib/postgresql/data
     pid: "service:pg-replica2"
@@ -234,6 +252,7 @@ services:
       ETCD_ENDPOINTS: "etcd:2379"
       REPLICATION_USER: "replicator"
       REPLICATION_PASSWORD: "replicator"
+      REPLICATION_PG_HOSTS: "pg-primary=pg-primary,pg-replica1=pg-replica1,pg-replica2=pg-replica2"
     networks:
       - ha-net
     depends_on:
@@ -265,3 +284,92 @@ services:
       - "5000:5000"
       - "5001:5001"
       - "7000:7000"
+
+  # ─────────────────────────────────────────
+  # Prometheus — metrics collection
+  # ─────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - ha-net
+    depends_on:
+      - orchestrator
+      - node-agent-primary
+      - node-agent-replica1
+      - node-agent-replica2
+      - postgres-exporter-primary
+      - postgres-exporter-replica1
+      - postgres-exporter-replica2
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Grafana — visualization
+  # ─────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.2.0
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - ha-net
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # PostgreSQL Exporters
+  # ─────────────────────────────────────────
+  postgres-exporter-primary:
+    image: prometheuscommunity/postgres-exporter:v0.12.0
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@pg-primary:5432/postgres?sslmode=disable"
+    networks:
+      - ha-net
+    depends_on:
+      - pg-primary
+    ports:
+      - "9187:9187"
+    restart: unless-stopped
+
+  postgres-exporter-replica1:
+    image: prometheuscommunity/postgres-exporter:v0.12.0
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@pg-replica1:5432/postgres?sslmode=disable"
+    networks:
+      - ha-net
+    depends_on:
+      - pg-replica1
+    ports:
+      - "9188:9187"
+    restart: unless-stopped
+
+  postgres-exporter-replica2:
+    image: prometheuscommunity/postgres-exporter:v0.12.0
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@pg-replica2:5432/postgres?sslmode=disable"
+    networks:
+      - ha-net
+    depends_on:
+      - pg-replica2
+    ports:
+      - "9189:9187"
+    restart: unless-stopped

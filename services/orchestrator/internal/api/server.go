@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -14,6 +16,7 @@ import (
 
 	orchestratorv1 "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1"
 	"github.com/zhavkk/Diploma/pkg/models"
+	"github.com/zhavkk/Diploma/pkg/version"
 )
 
 type TopologySource interface {
@@ -44,16 +47,35 @@ type Config struct {
 type Server struct {
 	orchestratorv1.UnimplementedOrchestratorServiceServer
 
-	cfg       Config
-	topo      TopologySource
-	failover  FailoverTrigger
-	replConf  ReplicationApplier
-	heartbeat HeartbeatReceiver
-	log       *zap.Logger
+	cfg         Config
+	topo        TopologySource
+	failover    FailoverTrigger
+	replConf    ReplicationApplier
+	heartbeat   HeartbeatReceiver
+	log         *zap.Logger
+	openAPIPath string
 }
 
 func NewServer(cfg Config, topo TopologySource, fm FailoverTrigger, rc ReplicationApplier, hb HeartbeatReceiver, log *zap.Logger) *Server {
-	return &Server{cfg: cfg, topo: topo, failover: fm, replConf: rc, heartbeat: hb, log: log}
+	// Try to find OpenAPI spec in different locations
+	openAPIPath := "/api/openapi.yaml"
+	if _, err := os.Stat(openAPIPath); os.IsNotExist(err) {
+		// Try relative path for local development
+		openAPIPath = "../../../../../api/openapi.yaml"
+		if _, err := os.Stat(openAPIPath); os.IsNotExist(err) {
+			openAPIPath = ""
+		}
+	}
+
+	return &Server{
+		cfg:         cfg,
+		topo:        topo,
+		failover:    fm,
+		replConf:    rc,
+		heartbeat:   hb,
+		log:         log,
+		openAPIPath: openAPIPath,
+	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -67,6 +89,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
+	mux.HandleFunc("/api/v1/swagger.yaml", s.handleOpenAPISpec)
+	mux.HandleFunc("/swagger/", s.handleSwaggerUI)
+	mux.HandleFunc("/", s.handleSwaggerRedirect)
 	httpSrv := &http.Server{Addr: s.cfg.HTTPAddr, Handler: mux}
 
 	grpcSrv := grpc.NewServer(s.cfg.GRPCOptions...)
@@ -178,6 +203,8 @@ func (s *Server) ReportHeartbeat(_ context.Context, req *orchestratorv1.ReportHe
 		WALReceiveLSN:   req.WalReceiveLsn,
 		ReplicationLag:  req.ReplicationLag,
 		PostgresRunning: req.PostgresRunning,
+		PGVersion:       req.PgVersion,
+		PGVersionParsed: version.Parse(req.PgVersion),
 		State:           state,
 	}
 	s.heartbeat.ReceiveHeartbeat(status)
@@ -209,4 +236,62 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(s.topo.Events()); err != nil {
 		s.log.Warn("failed to encode response", zap.Error(err))
 	}
+}
+
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.openAPIPath == "" {
+		s.log.Error("openapi spec path not set")
+		http.Error(w, "openapi spec not available", http.StatusNotFound)
+		return
+	}
+
+	content, err := os.ReadFile(s.openAPIPath)
+	if err != nil {
+		s.log.Error("failed to read openapi spec", zap.Error(err), zap.String("path", s.openAPIPath))
+		http.Error(w, "failed to load openapi spec", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/yaml")
+	if _, err := w.Write(content); err != nil {
+		s.log.Warn("failed to write openapi spec", zap.Error(err))
+	}
+}
+
+func (s *Server) handleSwaggerRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		http.Redirect(w, r, "/swagger/", http.StatusFound)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	// Try different possible paths for swagger UI
+	possiblePaths := []string{
+		"/api/swagger-ui/index.html",
+		"../../../../../api/swagger-ui/index.html",
+	}
+
+	var swaggerPath string
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			swaggerPath = path
+			break
+		}
+	}
+
+	if swaggerPath == "" {
+		s.log.Error("swagger UI not found")
+		http.Error(w, "swagger UI not available", http.StatusNotFound)
+		return
+	}
+
+	// Serve the file
+	http.ServeFile(w, r, swaggerPath)
 }

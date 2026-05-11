@@ -345,3 +345,86 @@ func TestProbe_Run_SetsPostgresRunningFalseOnError(t *testing.T) {
 		t.Errorf("State = %q, want %q", latest.State, models.StateDegraded)
 	}
 }
+
+// ─────────────────────────────────────────
+// Version parsing tests
+// ─────────────────────────────────────────
+
+func TestProbe_Collect_ParsesPGVersion(t *testing.T) {
+	tests := []struct {
+		name            string
+		versionStr      string
+		wantMajor       int
+		wantMinor       int
+		wantPatch       int
+		wantWarnOnParse bool
+	}{
+		{
+			name:       "standard version",
+			versionStr: "PostgreSQL 16.0",
+			wantMajor:  16,
+			wantMinor:  0,
+			wantPatch:  0,
+		},
+		{
+			name:       "version with minor",
+			versionStr: "PostgreSQL 15.2",
+			wantMajor:  15,
+			wantMinor:  2,
+			wantPatch:  0,
+		},
+		{
+			name:       "version with platform info",
+			versionStr: "PostgreSQL 15.2 on x86_64-pc-linux-gnu",
+			wantMajor:  15,
+			wantMinor:  2,
+			wantPatch:  0,
+		},
+		{
+			name:       "version with patch",
+			versionStr: "PostgreSQL 14.3.1",
+			wantMajor:  14,
+			wantMinor:  3,
+			wantPatch:  1,
+		},
+		{
+			name:            "invalid version",
+			versionStr:      "invalid",
+			wantMajor:       0,
+			wantMinor:       0,
+			wantPatch:       0,
+			wantWarnOnParse: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &mockPGClient{inRecovery: false, version: tt.versionStr}
+			p := probe.New(probe.Config{NodeID: "pg-primary", NodeAddr: "primary:50052", PollInterval: 5}, pg, zap.NewNop())
+
+			status, err := p.Collect(context.Background())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+
+			if status.PGVersion != tt.versionStr {
+				t.Errorf("PGVersion = %q, want %q", status.PGVersion, tt.versionStr)
+			}
+			if status.PGVersionParsed.Major != tt.wantMajor {
+				t.Errorf("PGVersionParsed.Major = %d, want %d", status.PGVersionParsed.Major, tt.wantMajor)
+			}
+			if status.PGVersionParsed.Minor != tt.wantMinor {
+				t.Errorf("PGVersionParsed.Minor = %d, want %d", status.PGVersionParsed.Minor, tt.wantMinor)
+			}
+			if status.PGVersionParsed.Patch != tt.wantPatch {
+				t.Errorf("PGVersionParsed.Patch = %d, want %d", status.PGVersionParsed.Patch, tt.wantPatch)
+			}
+
+			if tt.wantWarnOnParse {
+				if !status.PGVersionParsed.IsZero() {
+					t.Errorf("PGVersionParsed should be zero for invalid version, got %+v", status.PGVersionParsed)
+				}
+			}
+		})
+	}
+}

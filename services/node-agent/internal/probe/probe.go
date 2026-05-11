@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhavkk/Diploma/pkg/metrics"
 	"github.com/zhavkk/Diploma/pkg/models"
+	"github.com/zhavkk/Diploma/pkg/version"
 )
 
 // PGStatusClient queries the local PostgreSQL instance for health and replication status.
@@ -75,33 +76,41 @@ func (p *Probe) WithWatcher(w ReplicationWatcher) {
 
 // Run starts the probe loop, collecting status and sending heartbeats until the context is cancelled.
 func (p *Probe) Run(ctx context.Context) {
+	p.log.Info("probe loop starting", zap.Int("poll_interval_seconds", p.cfg.PollInterval))
 	ticker := time.NewTicker(time.Duration(p.cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			p.log.Info("probe loop stopping")
 			return
 		case <-ticker.C:
 			collectCtx, collectCancel := context.WithTimeout(ctx, time.Duration(p.cfg.PollInterval)*time.Second)
 			status, err := p.Collect(collectCtx)
 			collectCancel()
 			if err != nil {
-				p.log.Warn("probe collect error", zap.Error(err))
+				p.log.Error("probe collect error", zap.Error(err))
 				p.MarkPostgresDown()
 				continue
 			}
-			p.log.Debug("probe collected",
+			p.log.Info("probe collected status",
 				zap.String("node", status.NodeID),
 				zap.String("role", string(status.Role)),
+				zap.Bool("postgres_running", status.PostgresRunning),
 				zap.Int64("lag", status.ReplicationLag),
+				zap.String("pg_version", status.PGVersion),
 			)
 			if p.sender != nil {
 				sendCtx, sendCancel := context.WithTimeout(ctx, time.Duration(p.cfg.PollInterval)*time.Second)
 				if err := p.sender.Send(sendCtx, status); err != nil {
-					p.log.Warn("heartbeat send failed", zap.Error(err))
+					p.log.Error("heartbeat send failed", zap.Error(err))
+				} else {
+					p.log.Debug("heartbeat sent successfully")
 				}
 				sendCancel()
+			} else {
+				p.log.Warn("no heartbeat sender configured, heartbeat not sent")
 			}
 		}
 	}
@@ -149,9 +158,21 @@ func (p *Probe) Collect(ctx context.Context) (*models.NodeStatus, error) {
 		return nil, err
 	}
 
-	version, err := p.pg.Version(ctx)
+	versionStr, err := p.pg.Version(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Parse the PostgreSQL version string into structured components.
+	parsedVersion := version.Parse(versionStr)
+	if parsedVersion.IsZero() {
+		p.log.Warn("failed to parse PostgreSQL version", zap.String("raw_version", versionStr))
+	} else {
+		p.log.Info("successfully parsed PostgreSQL version",
+			zap.String("raw_version", versionStr),
+			zap.Int("major", parsedVersion.Major),
+			zap.Int("minor", parsedVersion.Minor),
+			zap.Int("patch", parsedVersion.Patch))
 	}
 
 	role := models.RolePrimary
@@ -173,7 +194,8 @@ func (p *Probe) Collect(ctx context.Context) (*models.NodeStatus, error) {
 		WALReceiveLSN:   receiveLSN,
 		WALReplayLSN:    replayLSN,
 		ReplicationLag:  lag,
-		PGVersion:       version,
+		PGVersion:       versionStr,
+		PGVersionParsed: parsedVersion,
 		PostgresRunning: true,
 		LastHeartbeat:   time.Now(),
 	}

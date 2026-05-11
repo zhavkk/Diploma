@@ -8,4 +8,5 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/orchestrator ./services/orchestrat
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /bin/orchestrator /bin/orchestrator
+COPY --from=builder /app/api /api
 ENTRYPOINT ["/bin/orchestrator"]

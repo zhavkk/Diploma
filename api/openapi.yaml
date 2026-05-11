@@ -1,0 +1,247 @@
+openapi: 3.0.0
+info:
+  title: HA PostgreSQL Cluster Orchestrator API
+  description: API для управления высокодоступным PostgreSQL кластером
+  version: 1.0.0
+  contact:
+    name: Diploma Project
+    email: admin@example.com
+
+servers:
+  - url: http://localhost:8080
+    description: Локальная разработка
+  - url: http://orchestrator:8080
+    description: Docker среда
+
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      description: Проверка здоровья orchestrator'а
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Orchestrator работает нормально
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: Метрики в формате Prometheus
+      tags:
+        - Metrics
+      responses:
+        '200':
+          description: Метрики в формате Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/status:
+    get:
+      summary: Получить статус кластера
+      description: Возвращает текущую топологию и статус всех узлов кластера
+      tags:
+        - Cluster
+      responses:
+        '200':
+          description: Текущий статус кластера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterTopology'
+              example:
+                primary_node: "pg-primary"
+                version: "12345"
+                nodes:
+                  - node_id: "pg-primary"
+                    address: "node-agent-primary:50052"
+                    role: "primary"
+                    state: "healthy"
+                    replication_lag: 0
+                  - node_id: "pg-replica1"
+                    address: "node-agent-replica1:50052"
+                    role: "replica"
+                    state: "healthy"
+                    replication_lag: 0
+                  - node_id: "pg-replica2"
+                    address: "node-agent-replica2:50052"
+                    role: "replica"
+                    state: "healthy"
+                    replication_lag: 0
+        '503':
+          description: Топология еще не готова
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/events:
+    get:
+      summary: Получить историю failover событий
+      description: Возвращает список всех failover событий в хронологическом порядке
+      tags:
+        - Cluster
+      responses:
+        '200':
+          description: Список failover событий
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FailoverEvent'
+              example:
+                - event_id: "failover-1"
+                  timestamp: "2026-04-18T13:00:00Z"
+                  old_primary: "pg-primary"
+                  new_primary: "pg-replica1"
+                  reason: "manual"
+                  triggered_by: "admin"
+                  success: true
+                - event_id: "failover-2"
+                  timestamp: "2026-04-18T14:30:00Z"
+                  old_primary: "pg-replica1"
+                  new_primary: "pg-primary"
+                  reason: "automatic"
+                  triggered_by: "orchestrator"
+                  success: true
+
+  /api/v1/swagger.yaml:
+    get:
+      summary: Получить OpenAPI спецификацию
+      description: Возвращает OpenAPI спецификацию в YAML формате
+      tags:
+        - Documentation
+      responses:
+        '200':
+          description: OpenAPI спецификация
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+components:
+  schemas:
+    ClusterTopology:
+      type: object
+      required:
+        - primary_node
+        - version
+        - nodes
+      properties:
+        primary_node:
+          type: string
+          description: ID текущего primary узла
+          example: "pg-primary"
+        version:
+          type: string
+          description: Версия топологии
+          example: "12345"
+        nodes:
+          type: array
+          description: Список всех узлов в кластере
+          items:
+            $ref: '#/components/schemas/Node'
+
+    Node:
+      type: object
+      required:
+        - node_id
+        - address
+        - role
+        - state
+      properties:
+        node_id:
+          type: string
+          description: Уникальный идентификатор узла
+          example: "pg-primary"
+        address:
+          type: string
+          description: gRPC адрес node agent'а
+          example: "node-agent-primary:50052"
+        role:
+          type: string
+          enum: [primary, replica]
+          description: Роль узла в кластере
+          example: "primary"
+        state:
+          type: string
+          enum: [healthy, degraded, unknown]
+          description: Текущее состояние узла
+          example: "healthy"
+        replication_lag:
+          type: integer
+          format: int64
+          description: Отставание в байтах от primary (0 для primary)
+          example: 0
+        wal_receive_lsn:
+          type: integer
+          format: int64
+          description: Последний полученный WAL LSN
+          example: 12345678
+        wal_replay_lsn:
+          type: integer
+          format: int64
+          description: Последний примененный WAL LSN
+          example: 12345678
+
+    FailoverEvent:
+      type: object
+      required:
+        - event_id
+        - timestamp
+        - old_primary
+        - new_primary
+        - reason
+        - success
+      properties:
+        event_id:
+          type: string
+          description: Уникальный идентификатор события
+          example: "failover-1"
+        timestamp:
+          type: string
+          format: date-time
+          description: Время события
+          example: "2026-04-18T13:00:00Z"
+        old_primary:
+          type: string
+          description: ID предыдущего primary узла
+          example: "pg-primary"
+        new_primary:
+          type: string
+          description: ID нового primary узла
+          example: "pg-replica1"
+        reason:
+          type: string
+          enum: [manual, automatic, health_check]
+          description: Причина failover'а
+          example: "manual"
+        triggered_by:
+          type: string
+          description: Кто инициировал failover
+          example: "admin"
+        success:
+          type: boolean
+          description: Успешность операции
+          example: true
+        error_message:
+          type: string
+          description: Сообщение об ошибке (если failover не удался)
+          example: ""
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Metrics
+    description: Prometheus metrics
+  - name: Cluster
+    description: Управление кластером
+  - name: Documentation
+    description: API документация

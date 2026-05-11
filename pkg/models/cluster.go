@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/zhavkk/Diploma/pkg/version"
+)
 
 // NodeRole represents the role of a PostgreSQL node in the cluster.
 type NodeRole string
@@ -42,6 +46,7 @@ type NodeStatus struct {
 	WALReplayLSN     int64             `json:"wal_replay_lsn"`
 	ReplicationLag   int64             `json:"replication_lag"`
 	PGVersion        string            `json:"pg_version"`
+	PGVersionParsed  version.PGVersion `json:"pg_version_parsed"`
 	PostgresRunning  bool              `json:"postgres_running"`
 	LastHeartbeat    time.Time         `json:"last_heartbeat"`
 	ReplicationStats *ReplicationStats `json:"replication_stats,omitempty"`

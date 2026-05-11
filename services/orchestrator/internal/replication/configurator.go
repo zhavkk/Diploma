@@ -28,6 +28,7 @@ type Config struct {
 	ReplicationUser     string // defaults to "replicator"
 	SSLMode             string // defaults to "disable"
 	PGPort              int    // defaults to 5432
+	PGHosts             map[string]string
 }
 
 func connInfoQuote(s string) string {
@@ -89,35 +90,24 @@ func (c *Configurator) Apply(ctx context.Context, cfg models.ReplicationConfig, 
 }
 
 // ReconfigureAfterFailover updates all replicas to stream from the new primary after a failover.
-func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryNodeID string) error {
+// Returns the number of successfully reconfigured replicas and an error if any replica failed.
+func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryNodeID string) (int, error) {
 	c.log.Info("reconfiguring replication after failover", zap.String("new_primary", newPrimaryNodeID))
 
 	if c.topo == nil {
-		return nil
+		return 0, nil
 	}
 	topo := c.topo.Get()
 	if topo == nil {
-		return nil
+		return 0, nil
 	}
 
 	addrMap := c.buildAddrMap()
 	newPrimaryAddr := addrMap[newPrimaryNodeID]
-	host := newPrimaryAddr
-	if h, _, err := net.SplitHostPort(newPrimaryAddr); err == nil {
-		host = h
-	}
-	sslMode := c.cfg.SSLMode
-	if sslMode == "" {
-		sslMode = "disable"
-	}
-	port := c.cfg.PGPort
-	if port == 0 {
-		port = 5432
-	}
-	primaryConnInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=%s",
-		host, port, connInfoQuote(c.cfg.ReplicationUser), connInfoQuote(c.cfg.ReplicationPassword), sslMode)
+	primaryConnInfo := c.PrimaryConnInfoForNode(newPrimaryNodeID, newPrimaryAddr)
 
 	var errs []error
+	successCount := 0
 	for _, node := range topo.Nodes {
 		if node.NodeID == newPrimaryNodeID {
 			continue
@@ -133,16 +123,32 @@ func (c *Configurator) ReconfigureAfterFailover(ctx context.Context, newPrimaryN
 				zap.Error(err),
 			)
 			errs = append(errs, fmt.Errorf("node %q: %w", node.NodeID, err))
+		} else {
+			successCount++
 		}
 	}
-	return errors.Join(errs...)
+	return successCount, errors.Join(errs...)
 }
 
 // PrimaryConnInfo builds a libpq-compatible connection string for the primary at the given address.
 func (c *Configurator) PrimaryConnInfo(addr string) string {
+	return c.PrimaryConnInfoForNode("", addr)
+}
+
+// PrimaryConnInfoForNode builds a libpq-compatible connection string for a node.
+// PGHosts can override the node-agent host when PostgreSQL is reachable through
+// a different hostname, which is common in Docker Compose.
+func (c *Configurator) PrimaryConnInfoForNode(nodeID, addr string) string {
 	host := addr
+	if nodeID != "" && c.cfg.PGHosts != nil {
+		if configuredHost := c.cfg.PGHosts[nodeID]; configuredHost != "" {
+			host = configuredHost
+		}
+	}
 	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
+		if host == addr {
+			host = h
+		}
 	}
 	sslMode := c.cfg.SSLMode
 	if sslMode == "" {

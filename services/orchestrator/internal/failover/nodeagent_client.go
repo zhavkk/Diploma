@@ -63,11 +63,20 @@ func withRetry(ctx context.Context, maxRetries int, base time.Duration, fn func(
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(wait):
-				wait *= 2
+			}
+			wait *= 2
+			if wait > base*8 { // Cap at 8x base wait
+				wait = base * 8
 			}
 		}
 		if lastErr = fn(); lastErr == nil {
 			return nil
+		}
+		// Check for cancellation immediately after function call
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 	}
 	return lastErr

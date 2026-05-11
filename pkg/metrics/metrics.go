@@ -55,4 +55,20 @@ var (
 		Help:      "Duration of probe collect calls in seconds.",
 		Buckets:   prometheus.DefBuckets,
 	}, []string{"node_id"})
+
+	// ReplicationReconfigureTotal counts replication reconfiguration attempts by result.
+	ReplicationReconfigureTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ha",
+		Subsystem: "replication",
+		Name:      "reconfigure_total",
+		Help:      "Total number of replication reconfiguration attempts by result.",
+	}, []string{"result"})
+
+	// VersionCompatibilityCheckTotal counts version compatibility checks by result.
+	VersionCompatibilityCheckTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ha",
+		Subsystem: "failover",
+		Name:      "version_compatibility_check_total",
+		Help:      "Total version compatibility checks by result. Possible results: success, incompatible, unparseable.",
+	}, []string{"result"})
 )

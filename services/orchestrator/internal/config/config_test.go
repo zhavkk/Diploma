@@ -154,6 +154,22 @@ func TestOrchestratorConfig_ReplicationPGPortFromEnv(t *testing.T) {
 	}
 }
 
+func TestOrchestratorConfig_ReplicationPGHostsFromEnv(t *testing.T) {
+	t.Setenv("NODE_ID", "orch-1")
+	t.Setenv("REPLICATION_PG_HOSTS", "pg-primary=pg-primary,pg-replica1=pg-replica1")
+
+	cfg, err := config.LoadOrchestrator()
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if cfg.ReplicationPGHosts["pg-primary"] != "pg-primary" {
+		t.Errorf("ReplicationPGHosts[pg-primary] = %q, want pg-primary", cfg.ReplicationPGHosts["pg-primary"])
+	}
+	if cfg.ReplicationPGHosts["pg-replica1"] != "pg-replica1" {
+		t.Errorf("ReplicationPGHosts[pg-replica1] = %q, want pg-replica1", cfg.ReplicationPGHosts["pg-replica1"])
+	}
+}
+
 func TestOrchestratorConfig_ErrorWhenReplicationPGPortZero(t *testing.T) {
 	t.Setenv("NODE_ID", "orch-1")
 	t.Setenv("REPLICATION_PG_PORT", "0")

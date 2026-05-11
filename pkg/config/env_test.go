@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/zhavkk/Diploma/pkg/config"
 )
@@ -96,5 +97,51 @@ func TestEnvStringSlice_ReturnsFallbackWhenAllBlank(t *testing.T) {
 	v := config.EnvStringSlice("TEST_SLICE_KEY", []string{"x"})
 	if len(v) != 1 || v[0] != "x" {
 		t.Errorf("EnvStringSlice = %v, want [x]", v)
+	}
+}
+
+func TestEnvDuration_ReturnsEnvValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+		want  time.Duration
+	}{
+		{"seconds", "TEST_DURATION_KEY", "30s", 30 * time.Second},
+		{"minutes", "TEST_DURATION_KEY", "5m", 5 * time.Minute},
+		{"hours", "TEST_DURATION_KEY", "2h", 2 * time.Hour},
+		{"milliseconds", "TEST_DURATION_KEY", "500ms", 500 * time.Millisecond},
+		{"mixed", "TEST_DURATION_KEY", "1h30m", 90 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.key, tt.value)
+
+			v := config.EnvDuration(tt.key, time.Minute)
+			if v != tt.want {
+				t.Errorf("EnvDuration = %v, want %v", v, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvDuration_ReturnsFallbackWhenEmpty(t *testing.T) {
+	t.Setenv("TEST_DURATION_KEY", "")
+
+	fallback := 10 * time.Minute
+	v := config.EnvDuration("TEST_DURATION_KEY", fallback)
+	if v != fallback {
+		t.Errorf("EnvDuration = %v, want %v", v, fallback)
+	}
+}
+
+func TestEnvDuration_ReturnsFallbackWhenInvalid(t *testing.T) {
+	t.Setenv("TEST_DURATION_KEY", "notaduration")
+
+	fallback := 10 * time.Minute
+	v := config.EnvDuration("TEST_DURATION_KEY", fallback)
+	if v != fallback {
+		t.Errorf("EnvDuration = %v, want %v", v, fallback)
 	}
 }

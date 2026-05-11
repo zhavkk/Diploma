@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	envutil "github.com/zhavkk/Diploma/pkg/config"
 )
@@ -16,6 +17,7 @@ type OrchestratorConfig struct {
 	ReplicationPassword string
 	ReplicationUser     string
 	ReplicationPGPort   int
+	ReplicationPGHosts  map[string]string
 	GRPCTLSCert         string
 	GRPCTLSKey          string
 	GRPCTLSCACert       string
@@ -37,6 +39,7 @@ func LoadOrchestrator() (*OrchestratorConfig, error) {
 		ReplicationPassword: envutil.EnvOr("REPLICATION_PASSWORD", "replicator"),
 		ReplicationUser:     envutil.EnvOr("REPLICATION_USER", "replicator"),
 		ReplicationPGPort:   envutil.EnvInt("REPLICATION_PG_PORT", 5432),
+		ReplicationPGHosts:  parseHostMap(envutil.EnvOr("REPLICATION_PG_HOSTS", "")),
 		GRPCTLSCert:         envutil.EnvOr("GRPC_TLS_CERT", ""),
 		GRPCTLSKey:          envutil.EnvOr("GRPC_TLS_KEY", ""),
 		GRPCTLSCACert:       envutil.EnvOr("GRPC_TLS_CA", ""),
@@ -51,4 +54,26 @@ func LoadOrchestrator() (*OrchestratorConfig, error) {
 		return nil, fmt.Errorf("config: REPLICATION_PG_PORT must be 1-65535, got %d", cfg.ReplicationPGPort)
 	}
 	return cfg, nil
+}
+
+func parseHostMap(raw string) map[string]string {
+	if raw == "" {
+		return nil
+	}
+	hosts := make(map[string]string)
+	for _, entry := range strings.Split(raw, ",") {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			hosts[key] = value
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	return hosts
 }

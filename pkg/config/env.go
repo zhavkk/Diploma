@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RequireEnv returns the value of the environment variable named by key.
@@ -60,4 +61,19 @@ func EnvStringSlice(key string, fallback []string) []string {
 		return fallback
 	}
 	return result
+}
+
+// EnvDuration returns the value of the environment variable named by key
+// parsed as a time.Duration (e.g., "5m", "30s", "1h"), or fallback if the
+// variable is not set, empty, or cannot be parsed.
+func EnvDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
 }

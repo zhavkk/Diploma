@@ -35,6 +35,22 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// Validate TLS certificates on startup
+	if cfg.GRPCTLSCert != "" || cfg.GRPCTLSCACert != "" {
+		result, err := tlsconfig.ValidateCertificates(cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
+		if err != nil {
+			log.Fatal("TLS certificate validation failed", zap.Error(err))
+		}
+		tlsconfig.LogValidationResults(log, result)
+
+		// Reject startup if any certificate is expired
+		if len(result.Expired) > 0 {
+			log.Fatal("cannot start: TLS certificates are expired",
+				zap.Int("expired_count", len(result.Expired)),
+			)
+		}
+	}
+
 	serverTLSOpt, err := tlsconfig.ServerOption(cfg.GRPCTLSCert, cfg.GRPCTLSKey)
 	if err != nil {
 		log.Fatal("TLS server credentials", zap.Error(err))
@@ -70,6 +86,7 @@ func main() {
 		ReplicationUser:     cfg.ReplicationUser,
 		SSLMode:             "disable",
 		PGPort:              cfg.ReplicationPGPort,
+		PGHosts:             cfg.ReplicationPGHosts,
 	}, topoRegistry, nodeAgentCaller, log)
 
 	failoverMgr := failover.NewManager(failover.Config{
@@ -92,6 +109,9 @@ func main() {
 	go healthMon.Run(ctx)
 	go failoverMgr.Run(ctx)
 	go coordModule.Run(ctx)
+
+	// Start periodic certificate validation monitoring
+	tlsconfig.StartPeriodicValidation(ctx, log, cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
 
 	log.Info("orchestrator started", zap.String("node_id", cfg.NodeID))
 

@@ -36,18 +36,23 @@ if [ ! -f "${PGDATA}/PG_VERSION" ]; then
     # -R: writes standby.signal + primary_conninfo into postgresql.auto.conf
     # -Xs: stream WAL during backup (avoids missing WAL segments)
     # --checkpoint=fast: don't wait for a scheduled checkpoint
-    gosu postgres \
-        PGPASSWORD="${REPLICATION_PASSWORD}" pg_basebackup \
-            -h "${PG_PRIMARY_HOST}" \
-            -D "${PGDATA}" \
-            -U replicator \
-            -Fp \
-            -Xs \
-            -P \
-            -R \
-            --checkpoint=fast
+    su - postgres -c "PGPASSWORD='${REPLICATION_PASSWORD}' pg_basebackup \
+        -h '${PG_PRIMARY_HOST}' \
+        -D '${PGDATA}' \
+        -U replicator \
+        -Fp \
+        -Xs \
+        -P \
+        -R \
+        --checkpoint=fast"
 
     echo "[replica-init] pg_basebackup completed. Standby configured."
+
+    # Update max_connections in the replicated config to match primary
+    if [ -f "${PGDATA}/postgresql.conf" ]; then
+        sed -i "s/^max_connections = 100/max_connections = 200/" "${PGDATA}/postgresql.conf"
+        echo "[replica-init] Updated max_connections to 200 in postgresql.conf"
+    fi
 else
     echo "[replica-init] PGDATA already initialized, skipping pg_basebackup."
 fi

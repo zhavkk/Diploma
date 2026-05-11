@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	envutil "github.com/zhavkk/Diploma/pkg/config"
 )
@@ -24,6 +25,13 @@ type NodeAgentConfig struct {
 	GRPCTLSCert   string
 	GRPCTLSKey    string
 	GRPCTLSCACert string
+
+	PgRewindRetryDelay time.Duration // delay between pg_rewind retries
+
+	// Connection pool settings for pgclient
+	PGMaxOpenConns    int
+	PGMaxIdleConns    int
+	PGConnMaxLifetime time.Duration
 }
 
 func LoadNodeAgent() (*NodeAgentConfig, error) {
@@ -68,6 +76,10 @@ func LoadNodeAgent() (*NodeAgentConfig, error) {
 		GRPCTLSCert:      envutil.EnvOr("GRPC_TLS_CERT", ""),
 		GRPCTLSKey:       envutil.EnvOr("GRPC_TLS_KEY", ""),
 		GRPCTLSCACert:    envutil.EnvOr("GRPC_TLS_CA", ""),
+		PGMaxOpenConns:     envutil.EnvInt("PG_MAX_OPEN_CONNS", 25),
+		PGMaxIdleConns:     envutil.EnvInt("PG_MAX_IDLE_CONNS", 5),
+		PGConnMaxLifetime:  envutil.EnvDuration("PG_CONN_MAX_LIFETIME", 5*time.Minute),
+		PgRewindRetryDelay: envutil.EnvDuration("PG_REWIND_RETRY_DELAY", 5*time.Second),
 	}
 	if cfg.PollInterval <= 0 {
 		return nil, fmt.Errorf("config: POLL_INTERVAL must be > 0, got %d", cfg.PollInterval)

@@ -15,12 +15,15 @@ import (
 var retryInterval = 3 * time.Second
 
 type Config struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	DBName   string
-	SSLMode  string
+	Host            string
+	Port            int
+	User            string
+	Password        string
+	DBName          string
+	SSLMode         string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
 }
 
 type Client struct {
@@ -67,6 +70,14 @@ func New(ctx context.Context, cfg Config, log *zap.Logger) (*Client, error) {
 	if pingErr != nil {
 		return nil, fmt.Errorf("pgclient: ping after %d attempts: %w", maxAttempts, pingErr)
 	}
+
+	// Apply connection pool settings.
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	if cfg.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	}
+
 	ok = true
 	return &Client{db: db}, nil
 }
@@ -154,4 +165,9 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 
 func (c *Client) Close() error {
 	return c.db.Close()
+}
+
+// Stats returns database statistics including connection pool information.
+func (c *Client) Stats() sql.DBStats {
+	return c.db.Stats()
 }

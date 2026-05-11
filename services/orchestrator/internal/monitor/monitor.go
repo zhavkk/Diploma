@@ -64,6 +64,8 @@ type Monitor struct {
 // If h also implements RejoinChecker, the monitor will call NeedsRejoin before
 // invoking the heavier HandleOldPrimaryRejoin.
 func (m *Monitor) WithRejoinHandler(h RejoinHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.rejoinHandler = h
 	if rc, ok := h.(RejoinChecker); ok {
 		m.rejoinChecker = rc
@@ -91,11 +93,29 @@ func NewMonitorWithClock(cfg Config, fm FailoverNotifier, tr *topology.Registry,
 func (m *Monitor) ReceiveHeartbeat(status *models.NodeStatus) {
 	status.LastHeartbeat = m.clock.Now()
 
+	var needsRejoin bool
+	var rejoinHandler RejoinHandler
+
 	m.mu.Lock()
 	m.nodeStatus[status.NodeID] = status
 	if m.notifiedPrimary == status.NodeID {
 		m.notifiedPrimary = ""
 	}
+
+	// Capture rejoin handler and check if rejoin is needed while holding the lock.
+	// This prevents data races if WithRejoinHandler is called concurrently.
+	if m.rejoinHandler != nil {
+		rejoinHandler = m.rejoinHandler
+		needsRejoin = true
+		if m.rejoinChecker != nil {
+			needsRejoin = m.rejoinChecker.NeedsRejoin(status.NodeID)
+		}
+	}
+
+	// Capture node info before releasing lock to use in rejoin call
+	nodeID := status.NodeID
+	nodeAddr := status.Address
+
 	m.mu.Unlock()
 
 	metrics.HeartbeatsReceived.WithLabelValues(status.NodeID).Inc()
@@ -107,16 +127,10 @@ func (m *Monitor) ReceiveHeartbeat(status *models.NodeStatus) {
 		zap.Int64("lag", status.ReplicationLag),
 	)
 
-	// Only attempt rejoin if the node actually needs it.
-	if m.rejoinHandler != nil {
-		needsRejoin := true
-		if m.rejoinChecker != nil {
-			needsRejoin = m.rejoinChecker.NeedsRejoin(status.NodeID)
-		}
-		if needsRejoin {
-			if err := m.rejoinHandler.HandleOldPrimaryRejoin(context.Background(), status.NodeID, status.Address); err != nil {
-				m.log.Warn("pg_rewind rejoin failed", zap.String("node", status.NodeID), zap.Error(err))
-			}
+	// Handle rejoin outside the lock - this can involve slow gRPC operations.
+	if needsRejoin && rejoinHandler != nil {
+		if err := rejoinHandler.HandleOldPrimaryRejoin(context.Background(), nodeID, nodeAddr); err != nil {
+			m.log.Warn("pg_rewind rejoin failed", zap.String("node", nodeID), zap.Error(err))
 		}
 	}
 }

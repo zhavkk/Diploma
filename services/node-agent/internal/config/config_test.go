@@ -37,6 +37,16 @@ func TestNodeAgentConfig_Defaults(t *testing.T) {
 	if cfg.PollInterval != 5 {
 		t.Errorf("PollInterval = %d, want 5", cfg.PollInterval)
 	}
+	// Verify default connection pool settings
+	if cfg.PGMaxOpenConns != 25 {
+		t.Errorf("PGMaxOpenConns = %d, want 25", cfg.PGMaxOpenConns)
+	}
+	if cfg.PGMaxIdleConns != 5 {
+		t.Errorf("PGMaxIdleConns = %d, want 5", cfg.PGMaxIdleConns)
+	}
+	if cfg.PGConnMaxLifetime.Minutes() != 5 {
+		t.Errorf("PGConnMaxLifetime = %v, want 5m", cfg.PGConnMaxLifetime)
+	}
 }
 
 func TestNodeAgentConfig_ReadsFromEnv(t *testing.T) {
@@ -72,6 +82,16 @@ func TestNodeAgentConfig_ReadsFromEnv(t *testing.T) {
 	}
 	if cfg.GRPCAddr != ":50053" {
 		t.Errorf("GRPCAddr = %q, want :50053", cfg.GRPCAddr)
+	}
+	// Verify connection pool settings can be customized
+	if cfg.PGMaxOpenConns != 25 {
+		t.Errorf("PGMaxOpenConns = %d, want 25 (default)", cfg.PGMaxOpenConns)
+	}
+	if cfg.PGMaxIdleConns != 5 {
+		t.Errorf("PGMaxIdleConns = %d, want 5 (default)", cfg.PGMaxIdleConns)
+	}
+	if cfg.PGConnMaxLifetime.Minutes() != 5 {
+		t.Errorf("PGConnMaxLifetime = %v, want 5m (default)", cfg.PGConnMaxLifetime)
 	}
 }
 
@@ -141,5 +161,51 @@ func TestNodeAgentConfig_ErrorOnMissingRequired(t *testing.T) {
 				t.Errorf("expected error when %s is missing", tc.unset)
 			}
 		})
+	}
+}
+
+func TestNodeAgentConfig_ConnectionPoolSettings(t *testing.T) {
+	t.Setenv("NODE_ID", "pg-replica2")
+	t.Setenv("NODE_ADDR", "10.0.0.2:50052")
+	t.Setenv("ORCHESTRATOR_ADDR", "10.0.0.100:50051")
+	t.Setenv("PGDATA", "/data/pg")
+	t.Setenv("PG_USER", "replicator")
+	t.Setenv("PG_PASSWORD", "pass")
+	t.Setenv("PG_MAX_OPEN_CONNS", "50")
+	t.Setenv("PG_MAX_IDLE_CONNS", "10")
+	t.Setenv("PG_CONN_MAX_LIFETIME", "10m")
+
+	cfg, err := config.LoadNodeAgent()
+	if err != nil {
+		t.Fatalf("LoadNodeAgent: %v", err)
+	}
+
+	if cfg.PGMaxOpenConns != 50 {
+		t.Errorf("PGMaxOpenConns = %d, want 50", cfg.PGMaxOpenConns)
+	}
+	if cfg.PGMaxIdleConns != 10 {
+		t.Errorf("PGMaxIdleConns = %d, want 10", cfg.PGMaxIdleConns)
+	}
+	if cfg.PGConnMaxLifetime.Minutes() != 10 {
+		t.Errorf("PGConnMaxLifetime = %v, want 10m", cfg.PGConnMaxLifetime)
+	}
+}
+
+func TestNodeAgentConfig_PgRewindRetryDelay(t *testing.T) {
+	t.Setenv("NODE_ID", "pg-replica3")
+	t.Setenv("NODE_ADDR", "10.0.0.3:50052")
+	t.Setenv("ORCHESTRATOR_ADDR", "10.0.0.100:50051")
+	t.Setenv("PGDATA", "/data/pg")
+	t.Setenv("PG_USER", "replicator")
+	t.Setenv("PG_PASSWORD", "pass")
+	t.Setenv("PG_REWIND_RETRY_DELAY", "10s")
+
+	cfg, err := config.LoadNodeAgent()
+	if err != nil {
+		t.Fatalf("LoadNodeAgent: %v", err)
+	}
+
+	if cfg.PgRewindRetryDelay.Seconds() != 10 {
+		t.Errorf("PgRewindRetryDelay = %v, want 10s", cfg.PgRewindRetryDelay)
 	}
 }

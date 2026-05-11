@@ -88,6 +88,7 @@ message ReportHeartbeatRequest {
   int64  replication_lag  = 6;
   bool   postgres_running = 7;
   int64  wal_receive_lsn  = 8; // bytes received (may be ahead of replay on replica)
+  string pg_version       = 9; // PostgreSQL version string
 }
 
 message ReportHeartbeatResponse {

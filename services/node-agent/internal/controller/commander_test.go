@@ -2,11 +2,14 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestExecCommander_Reconfigure_PreservesExistingKeys tests the file-parsing
@@ -120,33 +123,43 @@ func TestParseAndMergeAutoConf_EmptyValuesNotWritten(t *testing.T) {
 }
 
 func TestExecCommander_PgRewind_CreatesStandbySignal(t *testing.T) {
-	// Skip if running in an environment where we can't mock the command.
-	if os.Getenv("GO_TEST_PG_REWIND_MOCK") == "1" {
-		// This is the mock pg_rewind binary — just exit successfully.
-		return
-	}
-
 	pgdata := t.TempDir()
 
-	// Build a no-op helper binary that pretends to be pg_ctl and pg_rewind (exits 0).
-	helperDir := t.TempDir()
-	srcFile := filepath.Join(helperDir, "main.go")
-	if err := os.WriteFile(srcFile, []byte(`package main; func main() {}`), 0o644); err != nil {
+	// Create mock pg_rewind that succeeds
+	mockPgRewind := filepath.Join(pgdata, "pg_rewind")
+	script := `#!/bin/bash
+# Mock pg_rewind that succeeds
+exit 0
+`
+	if err := os.WriteFile(mockPgRewind, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, bin := range []string{"pg_ctl", "pg_rewind"} {
-		helperBin := filepath.Join(helperDir, bin)
-		buildCmd := exec.Command("go", "build", "-o", helperBin, srcFile)
-		buildCmd.Dir = helperDir
-		if out, err := buildCmd.CombinedOutput(); err != nil {
-			t.Fatalf("failed to build mock %s: %v\n%s", bin, err, out)
-		}
+
+	// Create mock pg_ctl that succeeds
+	mockPgCtl := filepath.Join(pgdata, "pg_ctl")
+	pgCtlScript := `#!/bin/bash
+exit 0
+`
+	if err := os.WriteFile(mockPgCtl, []byte(pgCtlScript), 0o755); err != nil {
+		t.Fatal(err)
 	}
 
-	// Put our mock binary first on PATH so exec.CommandContext finds it.
-	t.Setenv("PATH", helperDir+":"+os.Getenv("PATH"))
+	cmd := newTestExecCommander(pgdata, 5*time.Second, func(ctx context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 {
+			binName := filepath.Base(args[0])
+			mockBin := filepath.Join(pgdata, binName)
+			if _, err := os.Stat(mockBin); err == nil {
+				cmdArgs := args[1:]
+				output, err := exec.CommandContext(ctx, mockBin, cmdArgs...).CombinedOutput()
+				if err != nil {
+					return output, fmt.Errorf("%s: %w", binName, err)
+				}
+				return output, nil
+			}
+		}
+		return nil, fmt.Errorf("command not found: %s", args[0])
+	})
 
-	cmd := NewExecCommander(pgdata)
 	if err := cmd.PgRewind(context.Background(), "host=new-primary port=5432"); err != nil {
 		t.Fatalf("PgRewind: %v", err)
 	}
@@ -154,5 +167,123 @@ func TestExecCommander_PgRewind_CreatesStandbySignal(t *testing.T) {
 	signalPath := filepath.Join(pgdata, "standby.signal")
 	if _, err := os.Stat(signalPath); os.IsNotExist(err) {
 		t.Fatalf("standby.signal was not created in PGDATA (%s)", pgdata)
+	}
+}
+
+// TestExecCommander_PgRewind_DivergentHistoryError tests the specific error case
+// where pg_rewind fails due to divergent history, ensuring standby.signal is not created
+// and the error is identified as ErrTimelineDivergence.
+func TestExecCommander_PgRewind_DivergentHistoryError(t *testing.T) {
+	pgdata := t.TempDir()
+
+	// Create mock pg_rewind that returns divergent history error
+	mockPgRewind := filepath.Join(pgdata, "pg_rewind")
+	script := `#!/bin/bash
+# Simulate pg_rewind output for divergent history
+echo "could not find common ancestor of the source and target cluster's timelines" >&2
+exit 1
+`
+	if err := os.WriteFile(mockPgRewind, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create mock pg_ctl that succeeds
+	mockPgCtl := filepath.Join(pgdata, "pg_ctl")
+	pgCtlScript := `#!/bin/bash
+exit 0
+`
+	if err := os.WriteFile(mockPgCtl, []byte(pgCtlScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newTestExecCommander(pgdata, 5*time.Second, func(ctx context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 {
+			binName := filepath.Base(args[0])
+			mockBin := filepath.Join(pgdata, binName)
+			if _, err := os.Stat(mockBin); err == nil {
+				cmdArgs := args[1:]
+				output, err := exec.CommandContext(ctx, mockBin, cmdArgs...).CombinedOutput()
+				if err != nil {
+					return output, fmt.Errorf("%s: %w", binName, err)
+				}
+				return output, nil
+			}
+		}
+		return nil, fmt.Errorf("command not found: %s", args[0])
+	})
+
+	err := cmd.PgRewind(context.Background(), "host=new-primary port=5432")
+
+	if err == nil {
+		t.Fatalf("expected error from PgRewind when pg_rewind fails due to divergent history, got nil")
+	}
+
+	// standby.signal must NOT be created
+	signalPath := filepath.Join(pgdata, "standby.signal")
+	_, statErr := os.Stat(signalPath)
+	if statErr == nil {
+		t.Fatalf("standby.signal should NOT be created when pg_rewind fails due to divergent history")
+	}
+	if !os.IsNotExist(statErr) {
+		t.Fatalf("unexpected error checking standby.signal: %v", statErr)
+	}
+
+	// Error should be ErrTimelineDivergence (or wrap it)
+	if !errors.Is(err, ErrTimelineDivergence) {
+		t.Errorf("expected ErrTimelineDivergence (or wrapped error), got: %T: %v", err, err)
+	}
+
+	// Error should contain timeline divergence information
+	if !strings.Contains(err.Error(), "could not find common ancestor") {
+		t.Errorf("expected error to contain divergent history message, got: %v", err)
+	}
+}
+
+// TestIsTimelineDivergenceError tests the timeline divergence detection logic.
+func TestIsTimelineDivergenceError(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   []byte
+		expected bool
+	}{
+		{
+			name:     "exact match for timeline divergence",
+			output:   []byte("could not find common ancestor of the source and target cluster's timelines"),
+			expected: true,
+		},
+		{
+			name:     "case insensitive match",
+			output:   []byte("COULD NOT FIND COMMON ANCESTOR OF THE SOURCE AND TARGET CLUSTER'S TIMELINES"),
+			expected: true,
+		},
+		{
+			name:     "with apostrophe variation",
+			output:   []byte("could not find common ancestor of the source and target clusters timelines"),
+			expected: true,
+		},
+		{
+			name:     "different error message",
+			output:   []byte("connection refused"),
+			expected: false,
+		},
+		{
+			name:     "empty output",
+			output:   []byte(""),
+			expected: false,
+		},
+		{
+			name:     "partial match on timeline",
+			output:   []byte("timeline 2"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsTimelineDivergenceError(tt.output)
+			if result != tt.expected {
+				t.Errorf("IsTimelineDivergenceError(%q) = %v, want %v", string(tt.output), result, tt.expected)
+			}
+		})
 	}
 }

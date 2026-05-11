@@ -6,7 +6,9 @@ PROTO_OUT := api/proto/gen
 .PHONY: all build build-orchestrator build-node-agent build-cli \
         proto lint test clean \
         docker-build docker-build-cli up down logs \
-        ansible-check deploy-local help
+        ansible-check deploy-local help \
+        monitoring-up monitoring-down monitoring-logs \
+        prometheus-reload grafana-reset
 
 all: proto build
 
@@ -24,6 +26,11 @@ help:
 	@echo "  up                 — docker compose up -d"
 	@echo "  down               — docker compose down"
 	@echo "  logs               — docker compose logs -f"
+	@echo "  monitoring-up      — запустить только мониторинг (Prometheus + Grafana)"
+	@echo "  monitoring-down    — остановить мониторинг"
+	@echo "  monitoring-logs    — логи мониторинга"
+	@echo "  prometheus-reload  — перезагрузить конфигурацию Prometheus"
+	@echo "  grafana-reset      — сбросить Grafana (удалить данные)"
 
 
 build: build-orchestrator build-node-agent build-cli
@@ -76,6 +83,29 @@ down:
 
 logs:
 	docker compose -f deployments/docker-compose.yml logs -f
+
+# Monitoring commands
+monitoring-up:
+	docker compose -f deployments/docker-compose.yml up -d prometheus grafana
+	@echo "Monitoring started:"
+	@echo "  Prometheus: http://localhost:9090"
+	@echo "  Grafana:    http://localhost:3000 (admin/admin)"
+
+monitoring-down:
+	docker compose -f deployments/docker-compose.yml stop prometheus grafana
+
+monitoring-logs:
+	docker compose -f deployments/docker-compose.yml logs -f prometheus grafana
+
+prometheus-reload:
+	curl -X POST http://localhost:9090/-/reload
+	@echo "Prometheus configuration reloaded"
+
+grafana-reset:
+	docker compose -f deployments/docker-compose.yml stop grafana
+	docker volume rm diploma_grafana-data 2>/dev/null || true
+	docker compose -f deployments/docker-compose.yml up -d grafana
+	@echo "Grafana reset complete (admin/admin)"
 
 
 # Validate Ansible playbook syntax

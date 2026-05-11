@@ -147,10 +147,14 @@ func TestConfigurator_ReconfigureAfterFailover_CallsReplicasOnly(t *testing.T) {
 	caller := &mockNodeAgentCaller{}
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
-	if err := c.ReconfigureAfterFailover(context.Background(), "pg-replica1"); err != nil {
+	successCount, err := c.ReconfigureAfterFailover(context.Background(), "pg-replica1")
+	if err != nil {
 		t.Fatalf("ReconfigureAfterFailover: %v", err)
 	}
-	// pg-replica2 должен получить reconfig, pg-replica1 (новый primary) — нет
+	if successCount != 1 {
+		t.Errorf("expected success count 1, got %d", successCount)
+	}
+	// successCount verified above; pg-replica2 должен получить reconfig, pg-replica1 (новый primary) — нет
 	if len(caller.calls) != 1 {
 		t.Errorf("expected 1 reconfig call (for replica2 only), got %d", len(caller.calls))
 	}
@@ -171,7 +175,7 @@ func TestConfigurator_ReconfigureAfterFailover_PassesPrimaryConnInfo(t *testing.
 	caller := &mockNodeAgentCaller{}
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
-	_ = c.ReconfigureAfterFailover(context.Background(), "pg-replica1")
+	_, _ = c.ReconfigureAfterFailover(context.Background(), "pg-replica1")
 
 	if len(caller.calls) == 0 {
 		t.Fatal("no reconfig calls made")
@@ -187,8 +191,12 @@ func TestConfigurator_ReconfigureAfterFailover_NoopWhenTopologyNil(t *testing.T)
 	caller := &mockNodeAgentCaller{}
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
-	if err := c.ReconfigureAfterFailover(context.Background(), "pg-replica1"); err != nil {
+	successCount, err := c.ReconfigureAfterFailover(context.Background(), "pg-replica1")
+	if err != nil {
 		t.Errorf("unexpected error with nil topology: %v", err)
+	}
+	if successCount != 0 {
+		t.Errorf("expected success count 0 with nil topology, got %d", successCount)
 	}
 	if len(caller.calls) != 0 {
 		t.Error("expected no calls with nil topology")
@@ -264,9 +272,12 @@ func TestConfigurator_ReconfigureAfterFailover_ReturnsErrorWhenAnyReplicaFails(t
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
 	// Раньше: ошибки проглатывались, возвращался nil — это баг.
-	err := c.ReconfigureAfterFailover(context.Background(), "pg-new-primary")
+	successCount, err := c.ReconfigureAfterFailover(context.Background(), "pg-new-primary")
 	if err == nil {
 		t.Error("expected error when replica reconfiguration fails, got nil")
+	}
+	if successCount != 0 {
+		t.Errorf("expected success count 0 when all replicas fail, got %d", successCount)
 	}
 }
 
@@ -283,9 +294,12 @@ func TestConfigurator_ReconfigureAfterFailover_CollectsAllErrors(t *testing.T) {
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
 	// Оба узла провалились — оба должны присутствовать в итоговой ошибке.
-	err := c.ReconfigureAfterFailover(context.Background(), "pg-new-primary")
+	successCount, err := c.ReconfigureAfterFailover(context.Background(), "pg-new-primary")
 	if err == nil {
 		t.Fatal("expected aggregated error")
+	}
+	if successCount != 0 {
+		t.Errorf("expected success count 0 when all replicas fail, got %d", successCount)
 	}
 	// Продолжает обработку даже после первой ошибки (не fail-fast).
 	if len(caller.calls) != 2 {
@@ -315,6 +329,24 @@ func TestConfigurator_PrimaryConnInfo_UsesConfiguredUser(t *testing.T) {
 	got := c.PrimaryConnInfo("pg-primary:50052")
 	if !strings.Contains(got, "user='custom_user'") {
 		t.Errorf("PrimaryConnInfo = %q, expected user='custom_user'", got)
+	}
+}
+
+func TestConfigurator_PrimaryConnInfoForNode_UsesConfiguredPGHost(t *testing.T) {
+	c := replication.NewConfiguratorWithConfig(replication.Config{
+		ReplicationPassword: "secret",
+		SSLMode:             "disable",
+		PGPort:              5432,
+		PGHosts: map[string]string{
+			"pg-replica1": "pg-replica1",
+		},
+	}, nil, nil, zap.NewNop())
+	got := c.PrimaryConnInfoForNode("pg-replica1", "node-agent-replica1:50052")
+	if !strings.Contains(got, "host=pg-replica1") {
+		t.Errorf("PrimaryConnInfoForNode = %q, expected host=pg-replica1", got)
+	}
+	if strings.Contains(got, "node-agent-replica1") {
+		t.Errorf("PrimaryConnInfoForNode = %q, should not use node-agent host", got)
 	}
 }
 

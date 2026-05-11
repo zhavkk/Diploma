@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -17,10 +18,11 @@ type NodeStatusProvider interface {
 }
 
 type Config struct {
-	NodeID      string
-	PGData      string
-	GRPCAddr    string
-	GRPCOptions []grpc.ServerOption
+	NodeID             string
+	PGData             string
+	GRPCAddr           string
+	GRPCOptions        []grpc.ServerOption
+	PgRewindRetryDelay time.Duration // delay between pg_rewind retries
 }
 
 type Controller struct {

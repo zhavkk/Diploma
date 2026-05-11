@@ -68,9 +68,17 @@ func (c *Client) Watch(ctx context.Context, key string) <-chan string {
 	watchCh := c.etcd.Watch(ctx, key)
 	go func() {
 		defer close(ch)
-		for resp := range watchCh {
-			for _, ev := range resp.Events {
-				ch <- string(ev.Kv.Value)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case resp, ok := <-watchCh:
+				if !ok {
+					return
+				}
+				for _, ev := range resp.Events {
+					ch <- string(ev.Kv.Value)
+				}
 			}
 		}
 	}()

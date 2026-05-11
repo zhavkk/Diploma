@@ -12,6 +12,7 @@ defaults
 listen stats
     bind *:{{ hostvars['haproxy']['stats_port'] }}
     mode http
+    http-request use-service prometheus-exporter if { path /metrics }
     stats enable
     stats uri /
     stats refresh 5s
