@@ -11,19 +11,11 @@ import (
 	"github.com/zhavkk/Diploma/services/node-agent/internal/health"
 )
 
-// ─────────────────────────────────────────
-// Mock StatusProvider
-// ─────────────────────────────────────────
-
 type mockStatusProvider struct {
 	status *models.NodeStatus
 }
 
 func (m *mockStatusProvider) Latest() *models.NodeStatus { return m.status }
-
-// ─────────────────────────────────────────
-// /health/primary
-// ─────────────────────────────────────────
 
 func TestHealthServer_Primary_Returns200WhenPrimary(t *testing.T) {
 	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
@@ -66,7 +58,7 @@ func TestHealthServer_Primary_Returns503WhenNilStatus(t *testing.T) {
 }
 
 func TestHealthServer_Primary_Returns503WhenPostgresNotRunning(t *testing.T) {
-	// PostgresRunning=false, IsInRecovery=false — crashed primary should return 503.
+
 	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
 		status: &models.NodeStatus{IsInRecovery: false, PostgresRunning: false},
 	}, zap.NewNop())
@@ -80,7 +72,7 @@ func TestHealthServer_Primary_Returns503WhenPostgresNotRunning(t *testing.T) {
 }
 
 func TestHealthServer_Replica_Returns503WhenPostgresNotRunning(t *testing.T) {
-	// PostgresRunning=false, IsInRecovery=true — crashed replica should return 503.
+
 	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
 		status: &models.NodeStatus{IsInRecovery: true, PostgresRunning: false},
 	}, zap.NewNop())
@@ -92,10 +84,6 @@ func TestHealthServer_Replica_Returns503WhenPostgresNotRunning(t *testing.T) {
 		t.Errorf("status = %d, want 503 when PostgresRunning=false", w.Code)
 	}
 }
-
-// ─────────────────────────────────────────
-// /health/replica
-// ─────────────────────────────────────────
 
 func TestHealthServer_Replica_Returns200WhenReplica(t *testing.T) {
 	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{
@@ -125,10 +113,6 @@ func TestHealthServer_Replica_Returns503WhenPrimary(t *testing.T) {
 		t.Errorf("status = %d, want 503", w.Code)
 	}
 }
-
-// ─────────────────────────────────────────
-// /health/alive
-// ─────────────────────────────────────────
 
 func TestHealthServer_Alive_Returns200WhenRunning(t *testing.T) {
 	srv := health.NewServer(health.Config{Addr: ":0"}, &mockStatusProvider{

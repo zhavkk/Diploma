@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// RequireEnv returns the value of the environment variable named by key.
-// It returns an error if the variable is not set or is empty.
 func RequireEnv(key string) (string, error) {
 	v := os.Getenv(key)
 	if v == "" {
@@ -18,8 +16,6 @@ func RequireEnv(key string) (string, error) {
 	return v, nil
 }
 
-// EnvOr returns the value of the environment variable named by key,
-// or fallback if the variable is not set or is empty.
 func EnvOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -27,9 +23,6 @@ func EnvOr(key, fallback string) string {
 	return fallback
 }
 
-// EnvInt returns the value of the environment variable named by key
-// parsed as an integer, or fallback if the variable is not set, empty,
-// or cannot be parsed.
 func EnvInt(key string, fallback int) int {
 	v := os.Getenv(key)
 	if v == "" {
@@ -42,9 +35,6 @@ func EnvInt(key string, fallback int) int {
 	return n
 }
 
-// EnvStringSlice returns the value of the environment variable named by key
-// parsed as a comma-separated list of strings, or fallback if the variable
-// is not set, empty, or contains no non-empty elements after splitting.
 func EnvStringSlice(key string, fallback []string) []string {
 	v := os.Getenv(key)
 	if v == "" {
@@ -63,9 +53,6 @@ func EnvStringSlice(key string, fallback []string) []string {
 	return result
 }
 
-// EnvDuration returns the value of the environment variable named by key
-// parsed as a time.Duration (e.g., "5m", "30s", "1h"), or fallback if the
-// variable is not set, empty, or cannot be parsed.
 func EnvDuration(key string, fallback time.Duration) time.Duration {
 	v := os.Getenv(key)
 	if v == "" {

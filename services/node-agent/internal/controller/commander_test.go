@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// TestExecCommander_Reconfigure_PreservesExistingKeys tests the file-parsing
-// logic of parseAndMergeAutoConf directly without invoking pg_ctl.
 func TestExecCommander_Reconfigure_PreservesExistingKeys(t *testing.T) {
 	existing := strings.Join([]string{
 		"# some prior comment",
@@ -23,7 +21,6 @@ func TestExecCommander_Reconfigure_PreservesExistingKeys(t *testing.T) {
 
 	result := parseAndMergeAutoConf(existing, "host=pg-primary port=5432 user=replicator", "latest")
 
-	// Preserved settings must still be present.
 	if !strings.Contains(result, "max_connections = 100") {
 		t.Errorf("expected max_connections = 100 to be preserved, got:\n%s", result)
 	}
@@ -31,7 +28,6 @@ func TestExecCommander_Reconfigure_PreservesExistingKeys(t *testing.T) {
 		t.Errorf("expected shared_buffers = 256MB to be preserved, got:\n%s", result)
 	}
 
-	// New managed keys must be set correctly.
 	if !strings.Contains(result, "primary_conninfo = 'host=pg-primary port=5432 user=replicator'") {
 		t.Errorf("expected primary_conninfo to be set, got:\n%s", result)
 	}
@@ -39,7 +35,6 @@ func TestExecCommander_Reconfigure_PreservesExistingKeys(t *testing.T) {
 		t.Errorf("expected recovery_target_timeline to be set, got:\n%s", result)
 	}
 
-	// Header must be present.
 	if !strings.Contains(result, "# Managed by HA node-agent") {
 		t.Errorf("expected managed header comment, got:\n%s", result)
 	}
@@ -55,7 +50,6 @@ func TestParseAndMergeAutoConf_ReplacesExistingManagedKeys(t *testing.T) {
 
 	result := parseAndMergeAutoConf(existing, "host=new-primary port=5432 user=replicator", "latest")
 
-	// Old primary_conninfo must be replaced.
 	if strings.Contains(result, "old-primary") {
 		t.Errorf("old primary_conninfo should have been replaced, got:\n%s", result)
 	}
@@ -63,12 +57,10 @@ func TestParseAndMergeAutoConf_ReplacesExistingManagedKeys(t *testing.T) {
 		t.Errorf("expected new primary_conninfo, got:\n%s", result)
 	}
 
-	// Other settings preserved.
 	if !strings.Contains(result, "max_connections = 200") {
 		t.Errorf("expected max_connections = 200 to be preserved, got:\n%s", result)
 	}
 
-	// Only one primary_conninfo line.
 	count := strings.Count(result, "primary_conninfo")
 	if count != 1 {
 		t.Errorf("expected exactly 1 primary_conninfo line, got %d in:\n%s", count, result)
@@ -87,17 +79,14 @@ func TestParseAndMergeAutoConf_EmptyExistingFile(t *testing.T) {
 }
 
 func TestParseAndMergeAutoConf_EscapesSingleQuotesInGUCValue(t *testing.T) {
-	// connInfoQuote wraps the password in single quotes, e.g. password='s3cr3t'.
-	// When embedded in a postgresql.conf single-quoted GUC value the inner quotes
-	// must be escaped as '' to avoid premature string termination.
+
 	connInfo := "host=pg-primary port=5432 user=replicator password='s3cr3t' sslmode=disable"
 	result := parseAndMergeAutoConf("", connInfo, "latest")
 
-	// The GUC value must contain '' (doubled) around the password, not bare '.
 	if !strings.Contains(result, "password=''s3cr3t''") {
 		t.Errorf("expected password single-quotes escaped as '' in GUC value, got:\n%s", result)
 	}
-	// The outer single quotes of the GUC value must be present.
+
 	if !strings.Contains(result, "primary_conninfo = '") {
 		t.Errorf("expected primary_conninfo to be single-quoted GUC value, got:\n%s", result)
 	}
@@ -108,7 +97,6 @@ func TestParseAndMergeAutoConf_EmptyValuesNotWritten(t *testing.T) {
 
 	result := parseAndMergeAutoConf(existing, "", "")
 
-	// Empty values: no primary_conninfo or recovery_target_timeline should appear.
 	if strings.Contains(result, "primary_conninfo") {
 		t.Errorf("expected no primary_conninfo when value is empty, got:\n%s", result)
 	}
@@ -116,7 +104,6 @@ func TestParseAndMergeAutoConf_EmptyValuesNotWritten(t *testing.T) {
 		t.Errorf("expected no recovery_target_timeline when value is empty, got:\n%s", result)
 	}
 
-	// Preserved setting must still be there.
 	if !strings.Contains(result, "max_connections = 100") {
 		t.Errorf("expected max_connections = 100 to be preserved, got:\n%s", result)
 	}
@@ -125,17 +112,14 @@ func TestParseAndMergeAutoConf_EmptyValuesNotWritten(t *testing.T) {
 func TestExecCommander_PgRewind_CreatesStandbySignal(t *testing.T) {
 	pgdata := t.TempDir()
 
-	// Create mock pg_rewind that succeeds
 	mockPgRewind := filepath.Join(pgdata, "pg_rewind")
 	script := `#!/bin/bash
-# Mock pg_rewind that succeeds
 exit 0
 `
 	if err := os.WriteFile(mockPgRewind, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create mock pg_ctl that succeeds
 	mockPgCtl := filepath.Join(pgdata, "pg_ctl")
 	pgCtlScript := `#!/bin/bash
 exit 0
@@ -170,16 +154,11 @@ exit 0
 	}
 }
 
-// TestExecCommander_PgRewind_DivergentHistoryError tests the specific error case
-// where pg_rewind fails due to divergent history, ensuring standby.signal is not created
-// and the error is identified as ErrTimelineDivergence.
 func TestExecCommander_PgRewind_DivergentHistoryError(t *testing.T) {
 	pgdata := t.TempDir()
 
-	// Create mock pg_rewind that returns divergent history error
 	mockPgRewind := filepath.Join(pgdata, "pg_rewind")
 	script := `#!/bin/bash
-# Simulate pg_rewind output for divergent history
 echo "could not find common ancestor of the source and target cluster's timelines" >&2
 exit 1
 `
@@ -187,7 +166,6 @@ exit 1
 		t.Fatal(err)
 	}
 
-	// Create mock pg_ctl that succeeds
 	mockPgCtl := filepath.Join(pgdata, "pg_ctl")
 	pgCtlScript := `#!/bin/bash
 exit 0
@@ -218,7 +196,6 @@ exit 0
 		t.Fatalf("expected error from PgRewind when pg_rewind fails due to divergent history, got nil")
 	}
 
-	// standby.signal must NOT be created
 	signalPath := filepath.Join(pgdata, "standby.signal")
 	_, statErr := os.Stat(signalPath)
 	if statErr == nil {
@@ -228,18 +205,15 @@ exit 0
 		t.Fatalf("unexpected error checking standby.signal: %v", statErr)
 	}
 
-	// Error should be ErrTimelineDivergence (or wrap it)
 	if !errors.Is(err, ErrTimelineDivergence) {
 		t.Errorf("expected ErrTimelineDivergence (or wrapped error), got: %T: %v", err, err)
 	}
 
-	// Error should contain timeline divergence information
 	if !strings.Contains(err.Error(), "could not find common ancestor") {
 		t.Errorf("expected error to contain divergent history message, got: %v", err)
 	}
 }
 
-// TestIsTimelineDivergenceError tests the timeline divergence detection logic.
 func TestIsTimelineDivergenceError(t *testing.T) {
 	tests := []struct {
 		name     string

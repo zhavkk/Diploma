@@ -19,16 +19,16 @@ type NodeAgentConfig struct {
 	PGPassword string
 	PGSSLMode  string
 
-	PollInterval  int
-	GRPCAddr      string
-	HealthAddr    string
-	GRPCTLSCert   string
-	GRPCTLSKey    string
-	GRPCTLSCACert string
+	PollInterval         int
+	PollIntervalDuration time.Duration
+	GRPCAddr             string
+	HealthAddr           string
+	GRPCTLSCert          string
+	GRPCTLSKey           string
+	GRPCTLSCACert        string
 
-	PgRewindRetryDelay time.Duration // delay between pg_rewind retries
+	PgRewindRetryDelay time.Duration
 
-	// Connection pool settings for pgclient
 	PGMaxOpenConns    int
 	PGMaxIdleConns    int
 	PGConnMaxLifetime time.Duration
@@ -71,11 +71,15 @@ func LoadNodeAgent() (*NodeAgentConfig, error) {
 		PGPort:           envutil.EnvInt("PG_PORT", 5432),
 		PGSSLMode:        envutil.EnvOr("PG_SSL_MODE", "disable"),
 		PollInterval:     envutil.EnvInt("POLL_INTERVAL", 5),
-		GRPCAddr:         envutil.EnvOr("GRPC_ADDR", ":50052"),
-		HealthAddr:       envutil.EnvOr("HEALTH_ADDR", ":8081"),
-		GRPCTLSCert:      envutil.EnvOr("GRPC_TLS_CERT", ""),
-		GRPCTLSKey:       envutil.EnvOr("GRPC_TLS_KEY", ""),
-		GRPCTLSCACert:    envutil.EnvOr("GRPC_TLS_CA", ""),
+		PollIntervalDuration: envutil.EnvDuration(
+			"POLL_INTERVAL_DURATION",
+			time.Duration(envutil.EnvInt("POLL_INTERVAL", 5))*time.Second,
+		),
+		GRPCAddr:           envutil.EnvOr("GRPC_ADDR", ":50052"),
+		HealthAddr:         envutil.EnvOr("HEALTH_ADDR", ":8081"),
+		GRPCTLSCert:        envutil.EnvOr("GRPC_TLS_CERT", ""),
+		GRPCTLSKey:         envutil.EnvOr("GRPC_TLS_KEY", ""),
+		GRPCTLSCACert:      envutil.EnvOr("GRPC_TLS_CA", ""),
 		PGMaxOpenConns:     envutil.EnvInt("PG_MAX_OPEN_CONNS", 25),
 		PGMaxIdleConns:     envutil.EnvInt("PG_MAX_IDLE_CONNS", 5),
 		PGConnMaxLifetime:  envutil.EnvDuration("PG_CONN_MAX_LIFETIME", 5*time.Minute),
@@ -83,6 +87,9 @@ func LoadNodeAgent() (*NodeAgentConfig, error) {
 	}
 	if cfg.PollInterval <= 0 {
 		return nil, fmt.Errorf("config: POLL_INTERVAL must be > 0, got %d", cfg.PollInterval)
+	}
+	if cfg.PollIntervalDuration <= 0 {
+		return nil, fmt.Errorf("config: POLL_INTERVAL_DURATION must be > 0, got %s", cfg.PollIntervalDuration)
 	}
 	if cfg.PGPort <= 0 || cfg.PGPort > 65535 {
 		return nil, fmt.Errorf("config: PG_PORT must be 1-65535, got %d", cfg.PGPort)

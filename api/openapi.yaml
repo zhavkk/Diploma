@@ -112,6 +112,52 @@ paths:
                   triggered_by: "orchestrator"
                   success: true
 
+  /api/v1/failover:
+    post:
+      summary: Выполнить ручной failover
+      description: Повышает выбранную реплику до primary-узла и запускает перенастройку кластера
+      tags:
+        - Cluster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerFailoverRequest'
+            example:
+              target_node: "pg-replica1"
+      responses:
+        '200':
+          description: Failover успешно инициирован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriggerFailoverResponse'
+              example:
+                success: true
+                message: "failover initiated"
+        '400':
+          description: Некорректный запрос или не указан target_node
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          description: Failover отклонён текущим состоянием кластера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriggerFailoverResponse'
+              example:
+                success: false
+                message: "target node is not healthy"
+        '405':
+          description: Метод не поддерживается
+          content:
+            text/plain:
+              schema:
+                type: string
+
   /api/v1/swagger.yaml:
     get:
       summary: Получить OpenAPI спецификацию
@@ -148,6 +194,31 @@ components:
           description: Список всех узлов в кластере
           items:
             $ref: '#/components/schemas/Node'
+
+    TriggerFailoverRequest:
+      type: object
+      required:
+        - target_node
+      properties:
+        target_node:
+          type: string
+          description: ID реплики, которую нужно повысить до primary-узла
+          example: "pg-replica1"
+
+    TriggerFailoverResponse:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          description: Успешность запуска failover
+          example: true
+        message:
+          type: string
+          description: Результат операции или причина отказа
+          example: "failover initiated"
 
     Node:
       type: object

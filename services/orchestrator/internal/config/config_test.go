@@ -65,7 +65,7 @@ func TestOrchestratorConfig_ReadsFromEnv(t *testing.T) {
 }
 
 func TestOrchestratorConfig_ErrorWhenNodeIDMissing(t *testing.T) {
-	t.Setenv("NODE_ID", "") // явно пусто
+	t.Setenv("NODE_ID", "")
 
 	_, err := config.LoadOrchestrator()
 	if err == nil {

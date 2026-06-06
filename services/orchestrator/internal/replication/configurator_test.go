@@ -12,10 +12,6 @@ import (
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/replication"
 )
 
-// ─────────────────────────────────────────
-// Моки
-// ─────────────────────────────────────────
-
 type mockTopoSource struct {
 	topo *models.ClusterTopology
 }
@@ -42,10 +38,6 @@ func (m *mockNodeAgentCaller) ReconfigureReplication(_ context.Context, addr, pr
 	m.calls = append(m.calls, reconfigCall{addr: addr, primaryConnInfo: primaryConnInfo, timeline: timeline})
 	return m.reconfErr
 }
-
-// ─────────────────────────────────────────
-// Apply
-// ─────────────────────────────────────────
 
 func TestConfigurator_Apply_CallsGRPCForEachNode(t *testing.T) {
 	topo := &mockTopoSource{
@@ -121,7 +113,6 @@ func TestConfigurator_Apply_SkipsNodeWithNoAddress(t *testing.T) {
 	caller := &mockNodeAgentCaller{}
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
-	// Не должно быть ошибки — просто пропускаем узел без адреса
 	if err := c.Apply(context.Background(), models.ReplicationConfig{}, []string{"pg-replica1"}); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -130,14 +121,10 @@ func TestConfigurator_Apply_SkipsNodeWithNoAddress(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// ReconfigureAfterFailover
-// ─────────────────────────────────────────
-
 func TestConfigurator_ReconfigureAfterFailover_CallsReplicasOnly(t *testing.T) {
 	topo := &mockTopoSource{
 		topo: &models.ClusterTopology{
-			PrimaryNode: "pg-replica1", // новый primary после failover
+			PrimaryNode: "pg-replica1",
 			Nodes: []models.NodeStatus{
 				{NodeID: "pg-replica1", Address: "replica1:50052", Role: models.RoleReplica, State: models.StateHealthy},
 				{NodeID: "pg-replica2", Address: "replica2:50052", Role: models.RoleReplica, State: models.StateHealthy},
@@ -154,7 +141,7 @@ func TestConfigurator_ReconfigureAfterFailover_CallsReplicasOnly(t *testing.T) {
 	if successCount != 1 {
 		t.Errorf("expected success count 1, got %d", successCount)
 	}
-	// successCount verified above; pg-replica2 должен получить reconfig, pg-replica1 (новый primary) — нет
+
 	if len(caller.calls) != 1 {
 		t.Errorf("expected 1 reconfig call (for replica2 only), got %d", len(caller.calls))
 	}
@@ -180,7 +167,7 @@ func TestConfigurator_ReconfigureAfterFailover_PassesPrimaryConnInfo(t *testing.
 	if len(caller.calls) == 0 {
 		t.Fatal("no reconfig calls made")
 	}
-	// primary_conninfo должен указывать на нового primary
+
 	if caller.calls[0].primaryConnInfo == "" {
 		t.Error("expected non-empty primaryConnInfo")
 	}
@@ -202,10 +189,6 @@ func TestConfigurator_ReconfigureAfterFailover_NoopWhenTopologyNil(t *testing.T)
 		t.Error("expected no calls with nil topology")
 	}
 }
-
-// ─────────────────────────────────────────
-// Apply — передача PrimaryConnInfo
-// ─────────────────────────────────────────
 
 func TestConfigurator_Apply_PassesPrimaryConnInfoFromConfig(t *testing.T) {
 	topo := &mockTopoSource{
@@ -233,7 +216,7 @@ func TestConfigurator_Apply_PassesPrimaryConnInfoFromConfig(t *testing.T) {
 }
 
 func TestConfigurator_Apply_EmptyPrimaryConnInfoAllowed(t *testing.T) {
-	// Оператор обновляет только sync settings — primaryConnInfo пуст и это ок.
+
 	topo := &mockTopoSource{
 		topo: &models.ClusterTopology{
 			Nodes: []models.NodeStatus{
@@ -255,10 +238,6 @@ func TestConfigurator_Apply_EmptyPrimaryConnInfoAllowed(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// ReconfigureAfterFailover — сбор ошибок
-// ─────────────────────────────────────────
-
 func TestConfigurator_ReconfigureAfterFailover_ReturnsErrorWhenAnyReplicaFails(t *testing.T) {
 	topo := &mockTopoSource{
 		topo: &models.ClusterTopology{
@@ -271,7 +250,6 @@ func TestConfigurator_ReconfigureAfterFailover_ReturnsErrorWhenAnyReplicaFails(t
 	caller := &mockNodeAgentCaller{reconfErr: errors.New("connection refused")}
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
-	// Раньше: ошибки проглатывались, возвращался nil — это баг.
 	successCount, err := c.ReconfigureAfterFailover(context.Background(), "pg-new-primary")
 	if err == nil {
 		t.Error("expected error when replica reconfiguration fails, got nil")
@@ -293,7 +271,6 @@ func TestConfigurator_ReconfigureAfterFailover_CollectsAllErrors(t *testing.T) {
 	caller := &mockNodeAgentCaller{reconfErr: errors.New("timeout")}
 	c := replication.NewConfigurator(topo, caller, zap.NewNop())
 
-	// Оба узла провалились — оба должны присутствовать в итоговой ошибке.
 	successCount, err := c.ReconfigureAfterFailover(context.Background(), "pg-new-primary")
 	if err == nil {
 		t.Fatal("expected aggregated error")
@@ -301,7 +278,7 @@ func TestConfigurator_ReconfigureAfterFailover_CollectsAllErrors(t *testing.T) {
 	if successCount != 0 {
 		t.Errorf("expected success count 0 when all replicas fail, got %d", successCount)
 	}
-	// Продолжает обработку даже после первой ошибки (не fail-fast).
+
 	if len(caller.calls) != 2 {
 		t.Errorf("expected 2 reconfig attempts (both replicas), got %d", len(caller.calls))
 	}
@@ -369,7 +346,7 @@ func TestConfigurator_PrimaryConnInfo_PasswordWithSpecialChars(t *testing.T) {
 		PGPort:              5432,
 	}, nil, nil, zap.NewNop())
 	got := c.PrimaryConnInfo("pg-primary:50052")
-	// Password must be single-quoted with escaping
+
 	if !strings.Contains(got, `password='p@ss\'w\\rd'`) {
 		t.Errorf("PrimaryConnInfo = %q, expected quoted password", got)
 	}

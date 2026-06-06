@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"testing"
@@ -17,10 +19,6 @@ import (
 	"github.com/zhavkk/Diploma/pkg/models"
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/api"
 )
-
-// ─────────────────────────────────────────
-// Моки
-// ─────────────────────────────────────────
 
 type mockTopology struct {
 	topo   *models.ClusterTopology
@@ -45,12 +43,13 @@ type mockFailover struct {
 	triggerCalled      bool
 	targetNode         string
 	failoverInProgress bool
+	triggerErr         error
 }
 
 func (m *mockFailover) TriggerManualFailover(_ context.Context, targetNodeID string) error {
 	m.triggerCalled = true
 	m.targetNode = targetNodeID
-	return nil
+	return m.triggerErr
 }
 
 func (m *mockFailover) IsFailoverInProgress() bool {
@@ -76,10 +75,6 @@ func (m *mockHeartbeatReceiver) ReceiveHeartbeat(status *models.NodeStatus) {
 	m.received = status
 }
 
-// ─────────────────────────────────────────
-// Вспомогательная функция: in-process gRPC сервер
-// ─────────────────────────────────────────
-
 func setupOrchestrator(t *testing.T, topo api.TopologySource, fm api.FailoverTrigger, rc api.ReplicationApplier) (orchestratorv1.OrchestratorServiceClient, func()) {
 	t.Helper()
 	return setupOrchestratorWithHB(t, topo, fm, rc, &mockHeartbeatReceiver{})
@@ -94,7 +89,7 @@ func setupOrchestratorWithHB(t *testing.T, topo api.TopologySource, fm api.Failo
 	lis := bufconn.Listen(1 << 20)
 	grpcSrv := grpc.NewServer()
 	orchestratorv1.RegisterOrchestratorServiceServer(grpcSrv, srv)
-	go grpcSrv.Serve(lis) //nolint:errcheck
+	go grpcSrv.Serve(lis)
 
 	conn, err := grpc.NewClient("passthrough://bufnet",
 		grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
@@ -123,10 +118,6 @@ func sampleTopology() *models.ClusterTopology {
 		},
 	}
 }
-
-// ─────────────────────────────────────────
-// GetClusterStatus
-// ─────────────────────────────────────────
 
 func TestServer_GetClusterStatus_ReturnsTopology(t *testing.T) {
 	topo := &mockTopology{topo: sampleTopology()}
@@ -159,10 +150,6 @@ func TestServer_GetClusterStatus_WhenTopologyEmpty(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// TriggerFailover
-// ─────────────────────────────────────────
-
 func TestServer_TriggerFailover_CallsFailoverManager(t *testing.T) {
 	fm := &mockFailover{}
 	client, cleanup := setupOrchestrator(t, &mockTopology{topo: sampleTopology()}, fm, &mockReplConf{})
@@ -184,10 +171,6 @@ func TestServer_TriggerFailover_CallsFailoverManager(t *testing.T) {
 		t.Errorf("targetNode = %q, want %q", fm.targetNode, "pg-replica1")
 	}
 }
-
-// ─────────────────────────────────────────
-// ListNodes
-// ─────────────────────────────────────────
 
 func TestServer_ListNodes_ReturnsAllNodes(t *testing.T) {
 	topo := &mockTopology{topo: sampleTopology()}
@@ -233,10 +216,6 @@ func TestServer_ListNodes_ReplicaLagPopulated(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// UpdateReplicationConfig
-// ─────────────────────────────────────────
-
 func TestServer_UpdateReplicationConfig_AppliesConfig(t *testing.T) {
 	rc := &mockReplConf{}
 	client, cleanup := setupOrchestrator(t, &mockTopology{topo: sampleTopology()}, &mockFailover{}, rc)
@@ -260,22 +239,18 @@ func TestServer_UpdateReplicationConfig_AppliesConfig(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// ReportHeartbeat
-// ─────────────────────────────────────────
-
 func TestServer_ReportHeartbeat_UpdatesMonitor(t *testing.T) {
 	hb := &mockHeartbeatReceiver{}
 	client, cleanup := setupOrchestratorWithHB(t, &mockTopology{topo: sampleTopology()}, &mockFailover{}, &mockReplConf{}, hb)
 	defer cleanup()
 
 	resp, err := client.ReportHeartbeat(context.Background(), &orchestratorv1.ReportHeartbeatRequest{
-		NodeId:         "pg-replica1",
-		Address:        "replica1:50052",
-		Role:           "replica",
-		IsInRecovery:   true,
-		WalReplayLsn:   5000,
-		ReplicationLag: 10,
+		NodeId:          "pg-replica1",
+		Address:         "replica1:50052",
+		Role:            "replica",
+		IsInRecovery:    true,
+		WalReplayLsn:    5000,
+		ReplicationLag:  10,
 		PostgresRunning: true,
 	})
 	if err != nil {
@@ -295,12 +270,8 @@ func TestServer_ReportHeartbeat_UpdatesMonitor(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// Run — graceful shutdown
-// ─────────────────────────────────────────
-
 func TestServer_Run_HTTPShutdownOnContextCancel(t *testing.T) {
-	// Занимаем свободный порт, чтобы знать адрес HTTP-сервера.
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -323,7 +294,6 @@ func TestServer_Run_HTTPShutdownOnContextCancel(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- srv.Run(ctx) }()
 
-	// Ждём пока HTTP-сервер поднимется.
 	deadline := time.Now().Add(2 * time.Second)
 	var httpUp bool
 	for time.Now().Before(deadline) {
@@ -339,7 +309,6 @@ func TestServer_Run_HTTPShutdownOnContextCancel(t *testing.T) {
 		t.Fatal("HTTP server did not come up in 2s")
 	}
 
-	// Отменяем контекст — оба сервера должны остановиться.
 	cancel()
 
 	select {
@@ -351,7 +320,6 @@ func TestServer_Run_HTTPShutdownOnContextCancel(t *testing.T) {
 		t.Fatal("Run() did not return within 3s after context cancel")
 	}
 
-	// HTTP-сервер должен быть уже недоступен.
 	_, connErr := net.DialTimeout("tcp", httpAddr, 200*time.Millisecond)
 	if connErr == nil {
 		t.Error("HTTP server is still accepting connections after shutdown")
@@ -403,7 +371,7 @@ func TestServer_HandleStatus_ReturnsJSON(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx) //nolint:errcheck
+	go srv.Run(ctx)
 
 	deadline := time.Now().Add(2 * time.Second)
 	var resp *http.Response
@@ -455,7 +423,7 @@ func TestServer_HandleEvents_ReturnsJSONArray(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx) //nolint:errcheck
+	go srv.Run(ctx)
 
 	deadline := time.Now().Add(2 * time.Second)
 	var resp *http.Response
@@ -498,7 +466,7 @@ func TestServer_HandleEvents_ReturnsEmptySlice(t *testing.T) {
 		zap.NewNop(),
 	)
 	events := topo.Events()
-	// nil and empty slice are both acceptable for an empty event log
+
 	if len(events) != 0 {
 		t.Errorf("expected 0 events, got %d", len(events))
 	}
@@ -521,6 +489,109 @@ func TestServer_HandleEvents_ReturnsStoredEvents(t *testing.T) {
 	}
 	if got[0].Reason != "automatic" {
 		t.Errorf("Reason = %q, want %q", got[0].Reason, "automatic")
+	}
+}
+
+func TestServer_HandleFailover_PostTriggersManualFailover(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpAddr := ln.Addr().String()
+	ln.Close()
+
+	fm := &mockFailover{}
+	srv := api.NewServer(
+		api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: httpAddr},
+		&mockTopology{topo: sampleTopology()}, fm, &mockReplConf{}, &mockHeartbeatReceiver{},
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, e := http.Get("http://" + httpAddr + "/healthz")
+		if e == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp, err := http.Post(
+		"http://"+httpAddr+"/api/v1/failover",
+		"application/json",
+		bytes.NewBufferString(`{"target_node":"pg-replica1"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST /api/v1/failover: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if !fm.triggerCalled {
+		t.Fatal("expected TriggerManualFailover to be called")
+	}
+	if fm.targetNode != "pg-replica1" {
+		t.Errorf("targetNode = %q, want pg-replica1", fm.targetNode)
+	}
+
+	var got struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if !got.Success {
+		t.Errorf("Success = false, want true: %s", got.Message)
+	}
+}
+
+func TestServer_HandleFailover_ReturnsConflictWhenRejected(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpAddr := ln.Addr().String()
+	ln.Close()
+
+	srv := api.NewServer(
+		api.Config{GRPCAddr: "127.0.0.1:0", HTTPAddr: httpAddr},
+		&mockTopology{topo: sampleTopology()}, &mockFailover{triggerErr: errors.New("target is not healthy")},
+		&mockReplConf{}, &mockHeartbeatReceiver{},
+		zap.NewNop(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, e := http.Get("http://" + httpAddr + "/healthz")
+		if e == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp, err := http.Post(
+		"http://"+httpAddr+"/api/v1/failover",
+		"application/json",
+		bytes.NewBufferString(`{"target_node":"pg-replica1"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST /api/v1/failover: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 Conflict", resp.StatusCode)
 	}
 }
 
@@ -563,9 +634,8 @@ func TestServer_HandleStatus_RejectsNonGET(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx) //nolint:errcheck
+	go srv.Run(ctx)
 
-	// Wait for server to start.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, e := http.Get("http://" + httpAddr + "/healthz")
@@ -603,9 +673,8 @@ func TestServer_HandleEvents_RejectsNonGET(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx) //nolint:errcheck
+	go srv.Run(ctx)
 
-	// Wait for server to start.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, e := http.Get("http://" + httpAddr + "/healthz")

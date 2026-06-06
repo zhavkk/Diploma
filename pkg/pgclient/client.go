@@ -10,8 +10,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// retryInterval controls how long to wait between ping retries.
-// Overridable in tests.
 var retryInterval = 3 * time.Second
 
 type Config struct {
@@ -71,7 +69,6 @@ func New(ctx context.Context, cfg Config, log *zap.Logger) (*Client, error) {
 		return nil, fmt.Errorf("pgclient: ping after %d attempts: %w", maxAttempts, pingErr)
 	}
 
-	// Apply connection pool settings.
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	if cfg.ConnMaxLifetime > 0 {
@@ -148,7 +145,7 @@ func (c *Client) ReplicationStats(ctx context.Context) ([]ReplicationStat, error
 		); err != nil {
 			return nil, fmt.Errorf("pgclient: replication_stats scan: %w", err)
 		}
-		s.ClientAddr = clientAddr.String // empty string when NULL
+		s.ClientAddr = clientAddr.String
 		stats = append(stats, s)
 	}
 	return stats, rows.Err()
@@ -167,7 +164,6 @@ func (c *Client) Close() error {
 	return c.db.Close()
 }
 
-// Stats returns database statistics including connection pool information.
 func (c *Client) Stats() sql.DBStats {
 	return c.db.Stats()
 }

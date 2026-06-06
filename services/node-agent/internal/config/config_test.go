@@ -37,7 +37,7 @@ func TestNodeAgentConfig_Defaults(t *testing.T) {
 	if cfg.PollInterval != 5 {
 		t.Errorf("PollInterval = %d, want 5", cfg.PollInterval)
 	}
-	// Verify default connection pool settings
+
 	if cfg.PGMaxOpenConns != 25 {
 		t.Errorf("PGMaxOpenConns = %d, want 25", cfg.PGMaxOpenConns)
 	}
@@ -83,7 +83,7 @@ func TestNodeAgentConfig_ReadsFromEnv(t *testing.T) {
 	if cfg.GRPCAddr != ":50053" {
 		t.Errorf("GRPCAddr = %q, want :50053", cfg.GRPCAddr)
 	}
-	// Verify connection pool settings can be customized
+
 	if cfg.PGMaxOpenConns != 25 {
 		t.Errorf("PGMaxOpenConns = %d, want 25 (default)", cfg.PGMaxOpenConns)
 	}

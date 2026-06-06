@@ -17,21 +17,15 @@ import (
 	"github.com/zhavkk/Diploma/services/node-agent/internal/controller"
 )
 
-// ─────────────────────────────────────────
-// Mocks
-// ─────────────────────────────────────────
-
-// mockCommander implements PGCommander, recording calls and returning
-// configurable errors. All fields are guarded by mu for -race safety.
 type mockCommander struct {
 	mu sync.Mutex
 
 	promoteErr    error
 	promoteCalled bool
 
-	pgRewindErr    error
-	rewindCalled   bool
-	rewindSource   string
+	pgRewindErr  error
+	rewindCalled bool
+	rewindSource string
 
 	restartErr    error
 	restartCalled bool
@@ -73,8 +67,6 @@ func (m *mockCommander) Reconfigure(_ context.Context, primaryConnInfo, timeline
 	return m.reconfigErr
 }
 
-// mockStatusProvider implements NodeStatusProvider, returning a configurable
-// NodeStatus. Access is guarded by mu for -race safety.
 type mockStatusProvider struct {
 	mu     sync.RWMutex
 	status *models.NodeStatus
@@ -85,10 +77,6 @@ func (m *mockStatusProvider) Latest() *models.NodeStatus {
 	defer m.mu.RUnlock()
 	return m.status
 }
-
-// ─────────────────────────────────────────
-// Test helper: in-process gRPC server via bufconn
-// ─────────────────────────────────────────
 
 func setupTestServer(t *testing.T, cmd controller.PGCommander, sp controller.NodeStatusProvider) (nodeagentv1.NodeAgentServiceClient, func()) {
 	t.Helper()
@@ -103,7 +91,7 @@ func setupTestServer(t *testing.T, cmd controller.PGCommander, sp controller.Nod
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
 	nodeagentv1.RegisterNodeAgentServiceServer(srv, ctrl)
-	go srv.Serve(lis) //nolint:errcheck
+	go srv.Serve(lis)
 
 	conn, err := grpc.NewClient("passthrough://bufnet",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
@@ -123,10 +111,6 @@ func setupTestServer(t *testing.T, cmd controller.PGCommander, sp controller.Nod
 	}
 	return client, cleanup
 }
-
-// ─────────────────────────────────────────
-// PromoteNode
-// ─────────────────────────────────────────
 
 func TestController_PromoteNode_Success(t *testing.T) {
 	cmd := &mockCommander{}
@@ -158,7 +142,7 @@ func TestController_PromoteNode_Failure(t *testing.T) {
 
 	resp, err := client.PromoteNode(context.Background(), &nodeagentv1.PromoteNodeRequest{})
 	if err != nil {
-		// Controller returns the error inside the response, not as a gRPC status error.
+
 		t.Fatalf("unexpected transport error: %v", err)
 	}
 	if resp.Success {
@@ -171,10 +155,6 @@ func TestController_PromoteNode_Failure(t *testing.T) {
 		t.Errorf("expected error message %q, got %q", "pg_ctl: no such file", resp.Message)
 	}
 }
-
-// ─────────────────────────────────────────
-// ReconfigureReplication
-// ─────────────────────────────────────────
 
 func TestController_ReconfigureReplication_Success(t *testing.T) {
 	cmd := &mockCommander{}
@@ -228,10 +208,6 @@ func TestController_ReconfigureReplication_CommanderError(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// RunPgRewind
-// ─────────────────────────────────────────
-
 func TestController_RunPgRewind_Success(t *testing.T) {
 	cmd := &mockCommander{}
 	client, cleanup := setupTestServer(t, cmd, &mockStatusProvider{})
@@ -279,10 +255,6 @@ func TestController_RunPgRewind_CommanderError(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// RestartPostgres
-// ─────────────────────────────────────────
-
 func TestController_RestartPostgres_Success(t *testing.T) {
 	cmd := &mockCommander{}
 	client, cleanup := setupTestServer(t, cmd, &mockStatusProvider{})
@@ -322,10 +294,6 @@ func TestController_RestartPostgres_CommanderError(t *testing.T) {
 		t.Errorf("expected error message %q, got %q", "pg_ctl restart failed", resp.Message)
 	}
 }
-
-// ─────────────────────────────────────────
-// GetNodeStatus
-// ─────────────────────────────────────────
 
 func TestController_GetNodeStatus_Success(t *testing.T) {
 	sp := &mockStatusProvider{
@@ -392,11 +360,11 @@ func TestController_GetNodeStatus_WhenProbeNotReady(t *testing.T) {
 	if s == nil {
 		t.Fatal("expected non-nil Status even when probe not ready")
 	}
-	// NodeId is always set from controller config, even when Latest() returns nil.
+
 	if s.NodeId != "test-node" {
 		t.Errorf("NodeId: want %q, got %q", "test-node", s.NodeId)
 	}
-	// All other fields should be zero values when Latest() returns nil.
+
 	if s.Role != "" {
 		t.Errorf("Role: want empty, got %q", s.Role)
 	}

@@ -169,8 +169,6 @@ func TestReplicationConfig_JSONRoundTrip(t *testing.T) {
 	}
 }
 
-// TestNodeStatus_ZeroValueRoundTrip verifies that a zero-value NodeStatus
-// marshals and unmarshals back to an identical zero-value struct.
 func TestNodeStatus_ZeroValueRoundTrip(t *testing.T) {
 	var original models.NodeStatus
 
@@ -219,15 +217,11 @@ func TestNodeStatus_ZeroValueRoundTrip(t *testing.T) {
 	}
 }
 
-// TestClusterTopology_EmptyNodesSliceRoundTrip verifies that a ClusterTopology
-// with an explicitly empty (non-nil) Nodes slice round-trips through JSON.
-// Go's encoding/json marshals an empty non-nil slice as "[]" and unmarshals
-// "[]" back to a non-nil empty slice, so we assert len == 0 either way.
 func TestClusterTopology_EmptyNodesSliceRoundTrip(t *testing.T) {
 	original := models.ClusterTopology{
 		Version:     "v1",
 		PrimaryNode: "pg-primary",
-		Nodes:       []models.NodeStatus{}, // explicitly empty, not nil
+		Nodes:       []models.NodeStatus{},
 		UpdatedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 
@@ -241,8 +235,6 @@ func TestClusterTopology_EmptyNodesSliceRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	// encoding/json unmarshals "[]" into a non-nil empty slice.
-	// Either nil or length-0 is acceptable; the important thing is no nodes.
 	if len(got.Nodes) != 0 {
 		t.Errorf("Nodes length = %d, want 0", len(got.Nodes))
 	}
@@ -303,7 +295,6 @@ func TestNodeStatus_NilReplicationStats_OmittedInJSON(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	// The JSON should not contain "replication_stats" when it is nil.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal raw: %v", err)
@@ -313,9 +304,6 @@ func TestNodeStatus_NilReplicationStats_OmittedInJSON(t *testing.T) {
 	}
 }
 
-// TestNodeStatus_UnknownFieldIgnored verifies that Go's encoding/json silently
-// ignores unknown fields when unmarshaling into NodeStatus, and that known
-// fields are decoded correctly.
 func TestNodeStatus_UnknownFieldIgnored(t *testing.T) {
 	raw := `{"node_id":"x","unknown_field":"y"}`
 
@@ -327,7 +315,7 @@ func TestNodeStatus_UnknownFieldIgnored(t *testing.T) {
 	if got.NodeID != "x" {
 		t.Errorf("NodeID = %q, want %q", got.NodeID, "x")
 	}
-	// All other fields should be zero.
+
 	if got.Address != "" {
 		t.Errorf("Address = %q, want empty (unknown_field should be ignored)", got.Address)
 	}

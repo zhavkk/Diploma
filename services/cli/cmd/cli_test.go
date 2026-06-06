@@ -16,16 +16,12 @@ import (
 	orchestratorv1 "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1"
 )
 
-// ─────────────────────────────────────────
-// Mock orchestrator server
-// ─────────────────────────────────────────
-
 type mockOrchestratorSrv struct {
 	orchestratorv1.UnimplementedOrchestratorServiceServer
-	triggerCalled   bool
-	triggerTarget   string
-	updateCalled    bool
-	updateNames     string
+	triggerCalled bool
+	triggerTarget string
+	updateCalled  bool
+	updateNames   string
 }
 
 func (s *mockOrchestratorSrv) GetClusterStatus(_ context.Context, _ *orchestratorv1.GetClusterStatusRequest) (*orchestratorv1.GetClusterStatusResponse, error) {
@@ -60,19 +56,14 @@ func (s *mockOrchestratorSrv) UpdateReplicationConfig(_ context.Context, req *or
 	return &orchestratorv1.UpdateReplicationConfigResponse{Success: true, Message: "applied"}, nil
 }
 
-// ─────────────────────────────────────────
-// Helper: запуск in-process gRPC сервера
-// ─────────────────────────────────────────
-
 func startMockServer(t *testing.T, srv *mockOrchestratorSrv) string {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	grpcSrv := grpc.NewServer()
 	orchestratorv1.RegisterOrchestratorServiceServer(grpcSrv, srv)
-	go grpcSrv.Serve(lis) //nolint:errcheck
+	go grpcSrv.Serve(lis)
 	t.Cleanup(grpcSrv.Stop)
 
-	// Override the global dial function for tests
 	testDialFn = func(_ context.Context, _ string) (net.Conn, error) {
 		return lis.Dial()
 	}
@@ -80,10 +71,6 @@ func startMockServer(t *testing.T, srv *mockOrchestratorSrv) string {
 
 	return "passthrough://bufnet"
 }
-
-// ─────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────
 
 func TestCmdStatus_PrintsPrimaryNode(t *testing.T) {
 	srv := &mockOrchestratorSrv{}
@@ -151,7 +138,7 @@ func TestCmdNodes_ShowsHealthStatus(t *testing.T) {
 	var buf bytes.Buffer
 	_ = runNodes(addr, &buf)
 	out := buf.String()
-	// pg-replica2 is unhealthy — должно быть отражено в выводе
+
 	if !strings.Contains(out, "pg-replica2") {
 		t.Errorf("output %q should contain pg-replica2", out)
 	}
@@ -174,10 +161,6 @@ func TestCmdReplicationSetSync_CallsUpdateConfig(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// deriveHTTPAddr
-// ─────────────────────────────────────────
-
 func TestDeriveHTTPAddr(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -198,10 +181,6 @@ func TestDeriveHTTPAddr(t *testing.T) {
 		})
 	}
 }
-
-// ─────────────────────────────────────────
-// Events command (HTTP)
-// ─────────────────────────────────────────
 
 func TestCmdEvents_PrintsEvents(t *testing.T) {
 	events := []eventRow{
@@ -224,7 +203,7 @@ func TestCmdEvents_PrintsEvents(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(ln) //nolint:errcheck
+	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
 
 	var buf bytes.Buffer
@@ -256,7 +235,7 @@ func TestCmdEvents_EmptyList(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(ln) //nolint:errcheck
+	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
 
 	var buf bytes.Buffer
@@ -265,7 +244,7 @@ func TestCmdEvents_EmptyList(t *testing.T) {
 		t.Fatalf("events command: %v", err)
 	}
 	out := buf.String()
-	// Should have the header but no data rows
+
 	if !strings.Contains(out, "OLD_PRIMARY") {
 		t.Errorf("output %q missing header", out)
 	}

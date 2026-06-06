@@ -130,9 +130,9 @@ func TestCompare(t *testing.T) {
 
 func TestIsZero(t *testing.T) {
 	tests := []struct {
-		name  string
-		v     version.PGVersion
-		want  bool
+		name string
+		v    version.PGVersion
+		want bool
 	}{
 		{"zero version", version.PGVersion{}, true},
 		{"explicit zero", version.PGVersion{0, 0, 0}, true},
@@ -161,8 +161,8 @@ func TestCompatibleWith(t *testing.T) {
 		{"patch difference", version.PGVersion{15, 2, 0}, version.PGVersion{15, 2, 3}, true},
 		{"minor version +1", version.PGVersion{16, 1, 0}, version.PGVersion{16, 0, 0}, true},
 		{"minor version -1", version.PGVersion{16, 0, 0}, version.PGVersion{16, 1, 0}, true},
-		{"minor version +2", version.PGVersion{16, 2, 0}, version.PGVersion{16, 0, 0}, true}, // now true per PostgreSQL docs
-		{"minor version -2", version.PGVersion{16, 0, 0}, version.PGVersion{16, 2, 0}, true}, // now true per PostgreSQL docs
+		{"minor version +2", version.PGVersion{16, 2, 0}, version.PGVersion{16, 0, 0}, true},
+		{"minor version -2", version.PGVersion{16, 0, 0}, version.PGVersion{16, 2, 0}, true},
 		{"large minor difference (5)", version.PGVersion{15, 5, 0}, version.PGVersion{15, 0, 0}, true},
 		{"large minor difference (10)", version.PGVersion{14, 10, 0}, version.PGVersion{14, 0, 0}, true},
 		{"major version difference", version.PGVersion{15, 2, 0}, version.PGVersion{16, 0, 0}, false},
@@ -191,8 +191,8 @@ func TestRecommendedCompatibleWith(t *testing.T) {
 		{"patch difference", version.PGVersion{15, 2, 0}, version.PGVersion{15, 2, 3}, true},
 		{"minor version +1", version.PGVersion{16, 1, 0}, version.PGVersion{16, 0, 0}, true},
 		{"minor version -1", version.PGVersion{16, 0, 0}, version.PGVersion{16, 1, 0}, true},
-		{"minor version +2", version.PGVersion{16, 2, 0}, version.PGVersion{16, 0, 0}, false}, // not recommended
-		{"minor version -2", version.PGVersion{16, 0, 0}, version.PGVersion{16, 2, 0}, false}, // not recommended
+		{"minor version +2", version.PGVersion{16, 2, 0}, version.PGVersion{16, 0, 0}, false},
+		{"minor version -2", version.PGVersion{16, 0, 0}, version.PGVersion{16, 2, 0}, false},
 		{"large minor difference (5)", version.PGVersion{15, 5, 0}, version.PGVersion{15, 0, 0}, false},
 		{"major version difference", version.PGVersion{15, 2, 0}, version.PGVersion{16, 0, 0}, false},
 		{"zero version", version.PGVersion{0, 0, 0}, version.PGVersion{15, 2, 0}, false},
@@ -211,9 +211,9 @@ func TestRecommendedCompatibleWith(t *testing.T) {
 
 func TestMinVersionForReplication(t *testing.T) {
 	tests := []struct {
-		name  string
-		v     version.PGVersion
-		want  version.PGVersion
+		name string
+		v    version.PGVersion
+		want version.PGVersion
 	}{
 		{"standard version", version.PGVersion{16, 1, 0}, version.PGVersion{16, 0, 0}},
 		{"high minor version", version.PGVersion{15, 10, 0}, version.PGVersion{15, 0, 0}},
@@ -234,9 +234,9 @@ func TestMinVersionForReplication(t *testing.T) {
 
 func TestMaxVersionForReplication(t *testing.T) {
 	tests := []struct {
-		name  string
-		v     version.PGVersion
-		want  version.PGVersion
+		name string
+		v    version.PGVersion
+		want version.PGVersion
 	}{
 		{"standard version", version.PGVersion{16, 1, 0}, version.PGVersion{16, 999, 0}},
 		{"zero minor", version.PGVersion{15, 0, 0}, version.PGVersion{15, 999, 0}},

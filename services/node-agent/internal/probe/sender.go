@@ -35,7 +35,6 @@ func NewGRPCSenderWithDialer(fn func(ctx context.Context, addr string) (net.Conn
 	return &GRPCSender{dialFn: fn, orchestratorAddr: orchestratorAddr, dialOpts: dialOpts, log: zap.NewNop()}
 }
 
-// WithLogger sets the logger for the GRPC sender
 func (s *GRPCSender) WithLogger(log *zap.Logger) *GRPCSender {
 	s.mu.Lock()
 	defer s.mu.Unlock()

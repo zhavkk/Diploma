@@ -13,10 +13,6 @@ import (
 	"github.com/zhavkk/Diploma/services/node-agent/internal/probe"
 )
 
-// ─────────────────────────────────────────
-// Mock PGStatusClient
-// ─────────────────────────────────────────
-
 type mockPGClient struct {
 	inRecovery bool
 	replayLSN  int64
@@ -47,10 +43,6 @@ func (m *mockPGClient) Version(_ context.Context) (string, error) {
 	return m.version, nil
 }
 
-// ─────────────────────────────────────────
-// Mock HeartbeatSender
-// ─────────────────────────────────────────
-
 type mockSender struct {
 	mu    sync.Mutex
 	calls int
@@ -68,10 +60,6 @@ func (m *mockSender) callCount() int {
 	defer m.mu.Unlock()
 	return m.calls
 }
-
-// ─────────────────────────────────────────
-// probe.Collect() тесты
-// ─────────────────────────────────────────
 
 func TestProbe_Collect_SetsOwnAddress(t *testing.T) {
 	pg := &mockPGClient{inRecovery: false, version: "PostgreSQL 15.2"}
@@ -144,10 +132,6 @@ func TestProbe_Collect_ZeroLagForPrimary(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────
-// Mock ReplicationWatcher
-// ─────────────────────────────────────────
-
 type mockReplicationWatcher struct {
 	stats []probe.ReplicationStat
 }
@@ -155,10 +139,6 @@ type mockReplicationWatcher struct {
 func (m *mockReplicationWatcher) Latest() []probe.ReplicationStat {
 	return m.stats
 }
-
-// ─────────────────────────────────────────
-// probe.Collect() with watcher tests
-// ─────────────────────────────────────────
 
 func TestProbe_Collect_IncludesReplicationStatsFromWatcher(t *testing.T) {
 	pg := &mockPGClient{inRecovery: false, version: "PostgreSQL 15.2", replayLSN: 5000, receiveLSN: 5000}
@@ -231,7 +211,6 @@ func TestProbe_ConcurrentLatestAndCollect_NoRace(t *testing.T) {
 	pg := &mockPGClient{inRecovery: false, version: "PostgreSQL 15.2", replayLSN: 1000, receiveLSN: 1000}
 	p := probe.New(probe.Config{NodeID: "pg-primary", NodeAddr: "primary:50052", PollInterval: 5}, pg, zap.NewNop())
 
-	// Seed an initial status so MarkPostgresDown has something to work with.
 	_, _ = p.Collect(context.Background())
 
 	const goroutines = 30
@@ -240,7 +219,6 @@ func TestProbe_ConcurrentLatestAndCollect_NoRace(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 2)
 
-	// Writers: Collect and MarkPostgresDown
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
@@ -254,7 +232,6 @@ func TestProbe_ConcurrentLatestAndCollect_NoRace(t *testing.T) {
 		}()
 	}
 
-	// Readers: Latest
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
@@ -266,10 +243,6 @@ func TestProbe_ConcurrentLatestAndCollect_NoRace(t *testing.T) {
 
 	wg.Wait()
 }
-
-// ─────────────────────────────────────────
-// probe.Run() тесты
-// ─────────────────────────────────────────
 
 func TestProbe_Run_TickerCallsSend(t *testing.T) {
 	pg := &mockPGClient{inRecovery: false, version: "PostgreSQL 15.2", replayLSN: 1000, receiveLSN: 1000}
@@ -318,11 +291,10 @@ func TestProbe_Run_SkipsSendWhenCollectFails(t *testing.T) {
 }
 
 func TestProbe_Run_SetsPostgresRunningFalseOnError(t *testing.T) {
-	// First call succeeds, then fails — Latest() should reflect PostgresRunning=false.
+
 	successPG := &mockPGClient{inRecovery: false, version: "PG15"}
 	p := probe.New(probe.Config{NodeID: "pg-primary", NodeAddr: "primary:50052", PollInterval: 5}, successPG, zap.NewNop())
 
-	// Collect seeds p.latest internally on success.
 	status, err := p.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("initial Collect: %v", err)
@@ -331,7 +303,6 @@ func TestProbe_Run_SetsPostgresRunningFalseOnError(t *testing.T) {
 		t.Fatal("expected PostgresRunning=true on success")
 	}
 
-	// Simulate a subsequent failure.
 	p.MarkPostgresDown()
 
 	latest := p.Latest()
@@ -345,10 +316,6 @@ func TestProbe_Run_SetsPostgresRunningFalseOnError(t *testing.T) {
 		t.Errorf("State = %q, want %q", latest.State, models.StateDegraded)
 	}
 }
-
-// ─────────────────────────────────────────
-// Version parsing tests
-// ─────────────────────────────────────────
 
 func TestProbe_Collect_ParsesPGVersion(t *testing.T) {
 	tests := []struct {

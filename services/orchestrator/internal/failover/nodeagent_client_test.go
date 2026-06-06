@@ -17,10 +17,9 @@ import (
 
 const callerBufSize = 1024 * 1024
 
-// failingNodeAgentServer — фиктивный gRPC-сервер, возвращающий ошибку первые N раз.
 type failingNodeAgentServer struct {
 	nodeagentv1.UnimplementedNodeAgentServiceServer
-	failCount    int32 // сколько раз ещё вернуть ошибку
+	failCount    int32
 	promoteHits  atomic.Int32
 	reconfigHits atomic.Int32
 	pgRewindHits atomic.Int32
@@ -68,7 +67,7 @@ func newCallerTestServer(t *testing.T, srv nodeagentv1.NodeAgentServiceServer) (
 	lis := bufconn.Listen(callerBufSize)
 	grpcSrv := grpc.NewServer()
 	nodeagentv1.RegisterNodeAgentServiceServer(grpcSrv, srv)
-	go grpcSrv.Serve(lis) //nolint:errcheck
+	go grpcSrv.Serve(lis)
 
 	dialFn := func(ctx context.Context, _ string) (net.Conn, error) {
 		return lis.DialContext(ctx)
@@ -77,12 +76,8 @@ func newCallerTestServer(t *testing.T, srv nodeagentv1.NodeAgentServiceServer) (
 	return c, func() { grpcSrv.Stop(); lis.Close() }
 }
 
-// ─────────────────────────────────────────
-// PromoteNode — уже имеет retry, проверяем
-// ─────────────────────────────────────────
-
 func TestGRPCCaller_PromoteNode_RetriesOnTransientError(t *testing.T) {
-	srv := &failingNodeAgentServer{failCount: 2} // первые 2 — ошибка, 3-й — успех
+	srv := &failingNodeAgentServer{failCount: 2}
 	caller, cleanup := newCallerTestServer(t, srv)
 	defer cleanup()
 
@@ -96,10 +91,6 @@ func TestGRPCCaller_PromoteNode_RetriesOnTransientError(t *testing.T) {
 		t.Errorf("expected at least 3 PromoteNode calls (2 failures + 1 success), got %d", srv.promoteHits.Load())
 	}
 }
-
-// ─────────────────────────────────────────
-// ReconfigureReplication — должен иметь retry
-// ─────────────────────────────────────────
 
 func TestGRPCCaller_ReconfigureReplication_RetriesOnTransientError(t *testing.T) {
 	srv := &failingNodeAgentServer{failCount: 2}
@@ -131,10 +122,6 @@ func TestGRPCCaller_ReconfigureReplication_SucceedsOnFirstAttempt(t *testing.T) 
 	}
 }
 
-// ─────────────────────────────────────────
-// RunPgRewind — должен иметь retry
-// ─────────────────────────────────────────
-
 func TestGRPCCaller_RunPgRewind_RetriesOnTransientError(t *testing.T) {
 	srv := &failingNodeAgentServer{failCount: 2}
 	caller, cleanup := newCallerTestServer(t, srv)
@@ -164,10 +151,6 @@ func TestGRPCCaller_RunPgRewind_SucceedsOnFirstAttempt(t *testing.T) {
 		t.Errorf("expected exactly 1 call on success, got %d", srv.pgRewindHits.Load())
 	}
 }
-
-// -----------------------------------------
-// RestartPostgres
-// -----------------------------------------
 
 func TestGRPCCaller_RestartPostgres_RetriesOnTransientError(t *testing.T) {
 	srv := &failingNodeAgentServer{failCount: 2}

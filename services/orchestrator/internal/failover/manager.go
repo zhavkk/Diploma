@@ -15,38 +15,31 @@ import (
 	"github.com/zhavkk/Diploma/pkg/models"
 )
 
-// ReplicationConfigurator reconfigures replication on cluster nodes after a failover.
 type ReplicationConfigurator interface {
 	ReconfigureAfterFailover(ctx context.Context, newPrimaryNodeID string) (int, error)
 	PrimaryConnInfoForNode(nodeID, addr string) string
 }
 
-// Config holds failover manager settings such as the required quorum size.
 type Config struct {
 	QuorumSize int
 }
 
-// TopologyRegistry provides access to the cluster topology for failover decisions.
 type TopologyRegistry interface {
 	Primary() string
 	SetPrimary(nodeID string)
 	Get() *models.ClusterTopology
 }
 
-// CoordinationModule abstracts etcd-based leader election and cluster state persistence.
 type CoordinationModule interface {
 	IsLeader(ctx context.Context) (bool, error)
 	PutClusterState(ctx context.Context, key, value string) error
 	GetClusterState(ctx context.Context, key string) (string, error)
 }
 
-// EventAppender records failover events for audit and observability.
 type EventAppender interface {
 	AppendEvent(evt models.FailoverEvent)
 }
 
-// Manager orchestrates automatic and manual failover of the PostgreSQL primary.
-// It is safe for concurrent use.
 type Manager struct {
 	cfg        Config
 	topo       TopologyRegistry
@@ -62,10 +55,9 @@ type Manager struct {
 
 	oldPrimaryID       string
 	newPrimaryConnInfo string
-	fenceToken         string // STONITH fence token for split-brain prevention
+	fenceToken         string
 }
 
-// NewManager creates a new failover Manager with the given dependencies.
 func NewManager(
 	cfg Config,
 	topo TopologyRegistry,
@@ -84,12 +76,10 @@ func NewManager(
 	}
 }
 
-// WithEventStore sets the event store used to record failover events.
 func (m *Manager) WithEventStore(e EventAppender) {
 	m.eventStore = e
 }
 
-// generateFenceToken creates a cryptographically random fence token.
 func generateFenceToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -98,19 +88,16 @@ func generateFenceToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// Run blocks until the context is cancelled. The Manager reacts to failover notifications rather than polling.
 func (m *Manager) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// IsFailoverInProgress reports whether a failover operation is currently running.
 func (m *Manager) IsFailoverInProgress() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.failoverInProgress
 }
 
-// NotifyPrimaryFailure triggers an automatic failover after the given primary node is detected as failed.
 func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string) {
 	m.mu.Lock()
 	if m.failoverInProgress {
@@ -130,8 +117,6 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 		m.failoverInProgress = false
 		m.mu.Unlock()
 
-		// Always clear fence token on exit to allow old primary to rejoin
-		// after operator intervention, regardless of failover outcome
 		if m.fenceToken != "" {
 			m.clearFenceToken(ctx, failedNodeID)
 		}
@@ -139,7 +124,6 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 
 	m.log.Info("starting failover", zap.String("failed_primary", failedNodeID))
 
-	// Set STONITH fence token before proceeding with failover
 	if err := m.setFenceToken(ctx, failedNodeID); err != nil {
 		m.log.Error("failed to set fence token, aborting failover", zap.Error(err))
 		return
@@ -187,7 +171,7 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	if m.caller != nil {
 		if newPrimaryAddr != "" {
 			if err := m.caller.PromoteNode(ctx, newPrimaryAddr); err != nil {
-				// CRITICAL: abort failover if promotion fails to prevent split-brain
+
 				m.log.Error("PromoteNode failed, aborting failover to prevent split-brain",
 					zap.String("new_primary", newPrimary),
 					zap.String("new_primary_addr", newPrimaryAddr),
@@ -216,8 +200,7 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	successCount, reconfigErr := m.replConf.ReconfigureAfterFailover(ctx, newPrimary)
 	if reconfigErr != nil {
 		if successCount == 0 {
-			// CRITICAL: no replicas can be reconfigured, but we've already promoted the new primary
-			// The failover is committed but replication is broken - operator intervention required
+
 			m.log.Error("replication reconfiguration failed for all replicas - failover committed but replication broken",
 				zap.Int("success_count", successCount),
 				zap.String("new_primary", newPrimary),
@@ -229,7 +212,7 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 				zap.Int("success_count", successCount),
 				zap.Error(reconfigErr),
 			)
-			// Count partial failures
+
 			topo := m.topo.Get()
 			if topo != nil {
 				expectedCount := 0
@@ -278,16 +261,12 @@ func (m *Manager) NotifyPrimaryFailure(ctx context.Context, failedNodeID string)
 	}
 }
 
-// NeedsRejoin reports whether the given node is a former primary that needs pg_rewind to rejoin the cluster.
 func (m *Manager) NeedsRejoin(nodeID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.oldPrimaryID == nodeID && !m.rewindInProgress
 }
 
-// isTimelineDivergenceError checks if an error represents a timeline divergence failure.
-// Timeline divergence indicates the old primary has WAL history that cannot be reconciled
-// with the new primary and requires manual intervention (e.g., rebuilding from backup).
 func isTimelineDivergenceError(err error) bool {
 	if err == nil {
 		return false
@@ -297,9 +276,8 @@ func isTimelineDivergenceError(err error) bool {
 		strings.Contains(errStr, "could not find common ancestor of the source and target cluster's timelines")
 }
 
-// HandleOldPrimaryRejoin runs pg_rewind and reconfigures the old primary to rejoin the cluster as a replica.
 func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr string) error {
-	// Check STONITH fence - prevent split-brain by blocking fenced nodes from rejoining
+
 	if isFenced, err := m.checkFenced(ctx, nodeID); err != nil {
 		m.log.Warn("failed to check fence status, allowing rejoin with caution", zap.String("node", nodeID), zap.Error(err))
 	} else if isFenced {
@@ -335,11 +313,7 @@ func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr s
 	}
 	if err := m.caller.RunPgRewind(ctx, nodeAddr, connInfo); err != nil {
 		if isTimelineDivergenceError(err) {
-			// CRITICAL: Timeline divergence is a fatal error that requires manual intervention.
-			// The old primary has WAL history that cannot be reconciled with the new primary.
-			// Operator must either rebuild the node from a base backup or restore from a backup
-			// taken before the divergence point. Do not clear oldPrimaryID so this node
-			// remains flagged for manual rejoin.
+
 			m.log.Error("timeline divergence detected during pg_rewind - manual intervention required",
 				zap.String("node", nodeID),
 				zap.String("addr", nodeAddr),
@@ -350,12 +324,10 @@ func (m *Manager) HandleOldPrimaryRejoin(ctx context.Context, nodeID, nodeAddr s
 		return fmt.Errorf("pg_rewind for %s: %w", nodeID, err)
 	}
 
-	// Reconfigure the old primary as a replica of the new primary.
 	if err := m.caller.ReconfigureReplication(ctx, nodeAddr, connInfo, "latest"); err != nil {
 		return fmt.Errorf("reconfigure replication for %s: %w", nodeID, err)
 	}
 
-	// Restart PostgreSQL so it comes up as a standby.
 	if err := m.caller.RestartPostgres(ctx, nodeAddr); err != nil {
 		return fmt.Errorf("restart postgres for %s: %w", nodeID, err)
 	}
@@ -386,9 +358,6 @@ func (m *Manager) countHealthyReplicas(excludeNodeID string) int {
 	return count
 }
 
-// validateVersionCompatibility checks if the target node has a compatible PostgreSQL version
-// with the rest of the cluster. Returns true if compatible, false otherwise.
-// Logs warnings for version mismatches that are within the compatibility range.
 func (m *Manager) validateVersionCompatibility(targetNodeID string) (bool, error) {
 	topo := m.topo.Get()
 	if topo == nil {
@@ -406,7 +375,6 @@ func (m *Manager) validateVersionCompatibility(targetNodeID string) (bool, error
 		return false, fmt.Errorf("target node %q not found", targetNodeID)
 	}
 
-	// If target version is zero (could not be parsed), reject failover
 	if target.PGVersionParsed.IsZero() {
 		m.log.Error("cannot elect node as primary: failed to parse PostgreSQL version",
 			zap.String("node", targetNodeID),
@@ -416,13 +384,11 @@ func (m *Manager) validateVersionCompatibility(targetNodeID string) (bool, error
 		return false, nil
 	}
 
-	// Check compatibility with all other healthy nodes
 	for _, node := range topo.Nodes {
 		if node.NodeID == targetNodeID {
 			continue
 		}
 
-		// Skip nodes with unparsable versions - log warning but don't fail
 		if node.PGVersionParsed.IsZero() {
 			m.log.Warn("node has unparsable PostgreSQL version, skipping compatibility check",
 				zap.String("node", node.NodeID),
@@ -431,7 +397,6 @@ func (m *Manager) validateVersionCompatibility(targetNodeID string) (bool, error
 			continue
 		}
 
-		// Skip degraded/unreachable nodes from compatibility check
 		if node.State != models.StateHealthy {
 			continue
 		}
@@ -448,7 +413,6 @@ func (m *Manager) validateVersionCompatibility(targetNodeID string) (bool, error
 			return false, nil
 		}
 
-		// Log warning for minor version mismatches that are still compatible
 		if target.PGVersionParsed.Minor != node.PGVersionParsed.Minor {
 			m.log.Warn("minor version mismatch detected within compatibility range",
 				zap.String("target_node", targetNodeID),
@@ -463,8 +427,6 @@ func (m *Manager) validateVersionCompatibility(targetNodeID string) (bool, error
 	return true, nil
 }
 
-// ElectNewPrimary selects the healthy replica with the highest WAL replay LSN, excluding the given node.
-// Also validates PostgreSQL version compatibility before electing the new primary.
 func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 	topo := m.topo.Get()
 	if topo == nil {
@@ -483,7 +445,7 @@ func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 		if node.Role != models.RoleReplica {
 			continue
 		}
-		// Use the furthest-ahead LSN: received bytes may be ahead of replayed bytes.
+
 		nodeLSN := node.WALReplayLSN
 		if node.WALReceiveLSN > nodeLSN {
 			nodeLSN = node.WALReceiveLSN
@@ -504,7 +466,6 @@ func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 		return ""
 	}
 
-	// Validate version compatibility before returning the elected node
 	compatible, err := m.validateVersionCompatibility(best.NodeID)
 	if err != nil {
 		m.log.Error("version compatibility check failed",
@@ -520,7 +481,6 @@ func (m *Manager) ElectNewPrimary(excludeNodeID string) string {
 	return best.NodeID
 }
 
-// TriggerManualFailover promotes the specified target node to primary, demoting the current primary.
 func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string) error {
 	m.log.Info("manual failover requested", zap.String("target", targetNodeID))
 
@@ -546,7 +506,6 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 		return fmt.Errorf("failover: target %q is not healthy (state=%s)", targetNodeID, target.State)
 	}
 
-	// Validate PostgreSQL version compatibility before proceeding with manual failover
 	compatible, err := m.validateVersionCompatibility(targetNodeID)
 	if err != nil {
 		return fmt.Errorf("failover: version compatibility check failed: %w", err)
@@ -560,7 +519,7 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 		m.mu.Unlock()
 		return fmt.Errorf("failover: already in progress")
 	}
-	// Re-validate: check target hasn't become primary due to concurrent failover.
+
 	if m.topo.Primary() == targetNodeID {
 		m.mu.Unlock()
 		return fmt.Errorf("failover: target %q is already the primary (concurrent failover occurred)", targetNodeID)
@@ -579,14 +538,11 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 		m.failoverInProgress = false
 		m.mu.Unlock()
 
-		// Always clear fence token on exit to allow old primary to rejoin
-		// after operator intervention, regardless of failover outcome
 		if m.fenceToken != "" {
 			m.clearFenceToken(ctx, oldPrimary)
 		}
 	}()
 
-	// Set STONITH fence token before proceeding with failover
 	if err := m.setFenceToken(ctx, oldPrimary); err != nil {
 		return fmt.Errorf("failover: failed to set fence token: %w", err)
 	}
@@ -610,7 +566,7 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 
 	if m.caller != nil && target.Address != "" {
 		if err := m.caller.PromoteNode(ctx, target.Address); err != nil {
-			// CRITICAL: abort failover if promotion fails to prevent split-brain
+
 			m.log.Error("PromoteNode failed, aborting manual failover to prevent split-brain",
 				zap.String("target", targetNodeID),
 				zap.String("target_addr", target.Address),
@@ -634,8 +590,7 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 	successCount, reconfigErr := m.replConf.ReconfigureAfterFailover(ctx, targetNodeID)
 	if reconfigErr != nil {
 		if successCount == 0 {
-			// CRITICAL: no replicas can be reconfigured, but we've already promoted the target node
-			// The failover is committed but replication is broken - operator intervention required
+
 			m.log.Error("replication reconfiguration failed for all replicas - failover committed but replication broken",
 				zap.Int("success_count", successCount),
 				zap.String("new_primary", targetNodeID),
@@ -647,7 +602,7 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 				zap.Int("success_count", successCount),
 				zap.Error(reconfigErr),
 			)
-			// Count partial failures
+
 			topo := m.topo.Get()
 			if topo != nil {
 				expectedCount := 0
@@ -697,8 +652,6 @@ func (m *Manager) TriggerManualFailover(ctx context.Context, targetNodeID string
 	return nil
 }
 
-// setFenceToken writes a fence token to etcd for the given node.
-// This prevents the fenced node from rejoining the cluster, protecting against split-brain.
 func (m *Manager) setFenceToken(ctx context.Context, nodeID string) error {
 	token, err := generateFenceToken()
 	if err != nil {
@@ -721,8 +674,6 @@ func (m *Manager) setFenceToken(ctx context.Context, nodeID string) error {
 	return nil
 }
 
-// clearFenceToken removes the fence token from etcd for the given node.
-// This allows the node to rejoin the cluster after successful failover.
 func (m *Manager) clearFenceToken(ctx context.Context, nodeID string) {
 	key := fmt.Sprintf("fence/%s", nodeID)
 	if err := m.coord.PutClusterState(ctx, key, ""); err != nil {
@@ -740,13 +691,11 @@ func (m *Manager) clearFenceToken(ctx context.Context, nodeID string) {
 	m.log.Info("fence token cleared for node", zap.String("node", nodeID))
 }
 
-// checkFenced determines whether a node is currently fenced.
-// A fenced node has an active fence token in etcd and cannot rejoin the cluster.
 func (m *Manager) checkFenced(ctx context.Context, nodeID string) (bool, error) {
 	key := fmt.Sprintf("fence/%s", nodeID)
 	value, err := m.coord.GetClusterState(ctx, key)
 	if err != nil {
-		// If we can't read from etcd, assume not fenced but log warning
+
 		m.log.Warn("failed to read fence token from etcd, assuming not fenced",
 			zap.String("node", nodeID),
 			zap.Error(err),
@@ -754,6 +703,5 @@ func (m *Manager) checkFenced(ctx context.Context, nodeID string) (bool, error) 
 		return false, err
 	}
 
-	// Empty value means no fence token exists
 	return value != "", nil
 }

@@ -16,14 +16,10 @@ import (
 	"github.com/zhavkk/Diploma/services/node-agent/internal/probe"
 )
 
-// ─────────────────────────────────────────
-// Mock orchestrator gRPC server
-// ─────────────────────────────────────────
-
 type mockOrchestratorServer struct {
 	orchestratorv1.UnimplementedOrchestratorServiceServer
 	hits    atomic.Int32
-	lastReq atomic.Value // *orchestratorv1.ReportHeartbeatRequest
+	lastReq atomic.Value
 	failErr error
 }
 
@@ -41,7 +37,7 @@ func newSenderTestServer(t *testing.T, srv orchestratorv1.OrchestratorServiceSer
 	lis := bufconn.Listen(1 << 20)
 	grpcSrv := grpc.NewServer()
 	orchestratorv1.RegisterOrchestratorServiceServer(grpcSrv, srv)
-	go grpcSrv.Serve(lis) //nolint:errcheck
+	go grpcSrv.Serve(lis)
 
 	dialFn := func(ctx context.Context, _ string) (net.Conn, error) {
 		return lis.DialContext(ctx)
@@ -53,10 +49,6 @@ func newSenderTestServer(t *testing.T, srv orchestratorv1.OrchestratorServiceSer
 		lis.Close()
 	}
 }
-
-// ─────────────────────────────────────────
-// GRPCSender тесты
-// ─────────────────────────────────────────
 
 func TestGRPCSender_Send_Success(t *testing.T) {
 	srv := &mockOrchestratorServer{}
@@ -139,7 +131,6 @@ func TestGRPCSender_Close_Idempotent(t *testing.T) {
 	sender, cleanup := newSenderTestServer(t, srv)
 	defer cleanup()
 
-	// Send once to establish connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -153,11 +144,10 @@ func TestGRPCSender_Close_Idempotent(t *testing.T) {
 		t.Fatalf("Send failed: %v", err)
 	}
 
-	// Close twice — must not panic.
 	if err := sender.Close(); err != nil {
 		t.Fatalf("first Close failed: %v", err)
 	}
-	// Second Close should be safe (conn already nil or closed).
+
 	sender.Close()
 }
 

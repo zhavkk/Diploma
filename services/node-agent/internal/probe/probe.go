@@ -13,7 +13,6 @@ import (
 	"github.com/zhavkk/Diploma/pkg/version"
 )
 
-// PGStatusClient queries the local PostgreSQL instance for health and replication status.
 type PGStatusClient interface {
 	IsInRecovery(ctx context.Context) (bool, error)
 	WALReplayLSN(ctx context.Context) (int64, error)
@@ -21,12 +20,10 @@ type PGStatusClient interface {
 	Version(ctx context.Context) (string, error)
 }
 
-// ReplicationWatcher provides the latest replication stats collected by the watcher.
 type ReplicationWatcher interface {
 	Latest() []ReplicationStat
 }
 
-// ReplicationStat mirrors pgclient.ReplicationStat to avoid a direct dependency.
 type ReplicationStat struct {
 	ApplicationName string
 	ClientAddr      string
@@ -36,15 +33,13 @@ type ReplicationStat struct {
 	ReplayLag       int64
 }
 
-// Config holds probe settings including node identity and polling interval.
 type Config struct {
-	NodeID       string
-	NodeAddr     string
-	PollInterval int
+	NodeID               string
+	NodeAddr             string
+	PollInterval         int
+	PollIntervalDuration time.Duration
 }
 
-// Probe periodically collects PostgreSQL status and sends heartbeats to the orchestrator.
-// It is safe for concurrent use.
 type Probe struct {
 	cfg     Config
 	pg      PGStatusClient
@@ -55,29 +50,29 @@ type Probe struct {
 	latest  *models.NodeStatus
 }
 
-// New creates a Probe that polls the given PostgreSQL client.
 func New(cfg Config, pg PGStatusClient, log *zap.Logger) *Probe {
 	p := &Probe{cfg: cfg, pg: pg, log: log}
 	if p.cfg.PollInterval <= 0 {
 		p.cfg.PollInterval = 5
 	}
+	if p.cfg.PollIntervalDuration <= 0 {
+		p.cfg.PollIntervalDuration = time.Duration(p.cfg.PollInterval) * time.Second
+	}
 	return p
 }
 
-// WithSender sets the heartbeat sender used to report status to the orchestrator.
 func (p *Probe) WithSender(s HeartbeatSender) {
 	p.sender = s
 }
 
-// WithWatcher sets the replication watcher used to enrich heartbeat data with replication stats.
 func (p *Probe) WithWatcher(w ReplicationWatcher) {
 	p.watcher = w
 }
 
-// Run starts the probe loop, collecting status and sending heartbeats until the context is cancelled.
 func (p *Probe) Run(ctx context.Context) {
-	p.log.Info("probe loop starting", zap.Int("poll_interval_seconds", p.cfg.PollInterval))
-	ticker := time.NewTicker(time.Duration(p.cfg.PollInterval) * time.Second)
+	interval := p.interval()
+	p.log.Info("probe loop starting", zap.Duration("poll_interval", interval))
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -86,7 +81,7 @@ func (p *Probe) Run(ctx context.Context) {
 			p.log.Info("probe loop stopping")
 			return
 		case <-ticker.C:
-			collectCtx, collectCancel := context.WithTimeout(ctx, time.Duration(p.cfg.PollInterval)*time.Second)
+			collectCtx, collectCancel := context.WithTimeout(ctx, interval)
 			status, err := p.Collect(collectCtx)
 			collectCancel()
 			if err != nil {
@@ -102,7 +97,7 @@ func (p *Probe) Run(ctx context.Context) {
 				zap.String("pg_version", status.PGVersion),
 			)
 			if p.sender != nil {
-				sendCtx, sendCancel := context.WithTimeout(ctx, time.Duration(p.cfg.PollInterval)*time.Second)
+				sendCtx, sendCancel := context.WithTimeout(ctx, interval)
 				if err := p.sender.Send(sendCtx, status); err != nil {
 					p.log.Error("heartbeat send failed", zap.Error(err))
 				} else {
@@ -116,7 +111,17 @@ func (p *Probe) Run(ctx context.Context) {
 	}
 }
 
-// MarkPostgresDown updates the latest status to indicate PostgreSQL is not running.
+func (p *Probe) interval() time.Duration {
+	if p.cfg.PollIntervalDuration > 0 {
+		return p.cfg.PollIntervalDuration
+	}
+	return time.Duration(p.cfg.PollInterval) * time.Second
+}
+
+func (p *Probe) Refresh(ctx context.Context) (*models.NodeStatus, error) {
+	return p.Collect(ctx)
+}
+
 func (p *Probe) MarkPostgresDown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -129,14 +134,12 @@ func (p *Probe) MarkPostgresDown() {
 	p.latest = &down
 }
 
-// Latest returns the most recently collected node status, or nil if no collection has occurred.
 func (p *Probe) Latest() *models.NodeStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.latest
 }
 
-// Collect queries the local PostgreSQL instance and returns its current status.
 func (p *Probe) Collect(ctx context.Context) (*models.NodeStatus, error) {
 	start := time.Now()
 	defer func() {
@@ -163,7 +166,6 @@ func (p *Probe) Collect(ctx context.Context) (*models.NodeStatus, error) {
 		return nil, err
 	}
 
-	// Parse the PostgreSQL version string into structured components.
 	parsedVersion := version.Parse(versionStr)
 	if parsedVersion.IsZero() {
 		p.log.Warn("failed to parse PostgreSQL version", zap.String("raw_version", versionStr))
@@ -200,11 +202,9 @@ func (p *Probe) Collect(ctx context.Context) (*models.NodeStatus, error) {
 		LastHeartbeat:   time.Now(),
 	}
 
-	// Enrich with watcher replication stats when available.
 	if p.watcher != nil {
 		if stats := p.watcher.Latest(); len(stats) > 0 {
-			// For a primary node, aggregate downstream replica stats.
-			// Use the first replica's state as representative and sum lag.
+
 			var totalLag int64
 			for _, s := range stats {
 				totalLag += s.ReplayLag

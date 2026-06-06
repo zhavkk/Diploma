@@ -18,8 +18,6 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-// generateTestCert creates a test certificate and key with the given validity period.
-// Returns the certificate and key PEM encoded bytes.
 func generateTestCert(commonName string, isCA bool, notBefore, notAfter time.Time) ([]byte, []byte, error) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -123,7 +121,7 @@ func TestValidateCertificates_ExpiredCert(t *testing.T) {
 
 func TestValidateCertificates_ExpiringSoonCert(t *testing.T) {
 	now := time.Now()
-	// Expires in 15 days (within the 30-day threshold)
+
 	certPEM, keyPEM, err := generateTestCert("expiring.example.com", false, now.Add(-15*24*time.Hour), now.Add(15*24*time.Hour))
 	require.NoError(t, err)
 
@@ -142,7 +140,7 @@ func TestValidateCertificates_ExpiringSoonCert(t *testing.T) {
 
 func TestValidateCertificates_JustAboveThreshold(t *testing.T) {
 	now := time.Now()
-	// Expires in 31 days (just above the 30-day threshold)
+
 	certPEM, keyPEM, err := generateTestCert("valid.example.com", false, now.Add(-4*24*time.Hour), now.Add(31*24*time.Hour))
 	require.NoError(t, err)
 
@@ -195,11 +193,9 @@ func TestValidateCertificates_ExpiredCACert(t *testing.T) {
 func TestValidateCertificates_BothCertAndCA(t *testing.T) {
 	now := time.Now()
 
-	// Create CA
 	caCertPEM, _, err := generateTestCert("test-ca.example.com", true, now.Add(-24*time.Hour), now.Add(365*24*time.Hour))
 	require.NoError(t, err)
 
-	// Create server cert
 	serverCertPEM, serverKeyPEM, err := generateTestCert("server.example.com", false, now.Add(-24*time.Hour), now.Add(365*24*time.Hour))
 	require.NoError(t, err)
 
@@ -251,7 +247,7 @@ func TestValidateCertificates_InvalidPEM(t *testing.T) {
 
 func TestLogValidationResults_NilResult(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	// Should not panic
+
 	LogValidationResults(logger, nil)
 }
 
@@ -260,7 +256,7 @@ func TestLogValidationResults_NoCertificates(t *testing.T) {
 	result := &ValidationResult{
 		Certificates: []CertInfo{},
 	}
-	// Should not panic
+
 	LogValidationResults(logger, result)
 }
 
@@ -278,7 +274,7 @@ func TestLogValidationResults_ValidCertificates(t *testing.T) {
 			},
 		},
 	}
-	// Should not panic
+
 	LogValidationResults(logger, result)
 }
 
@@ -313,7 +309,6 @@ func TestParseCertificatesFromPEM(t *testing.T) {
 	cert2PEM, _, err := generateTestCert("cert2.example.com", false, now.Add(-24*time.Hour), now.Add(365*24*time.Hour))
 	require.NoError(t, err)
 
-	// Concatenate PEM blocks
 	combinedPEM := string(cert1PEM) + string(cert2PEM)
 
 	certs, err := parseCertificatesFromPEM([]byte(combinedPEM))

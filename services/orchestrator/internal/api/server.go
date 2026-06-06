@@ -57,10 +57,10 @@ type Server struct {
 }
 
 func NewServer(cfg Config, topo TopologySource, fm FailoverTrigger, rc ReplicationApplier, hb HeartbeatReceiver, log *zap.Logger) *Server {
-	// Try to find OpenAPI spec in different locations
+
 	openAPIPath := "/api/openapi.yaml"
 	if _, err := os.Stat(openAPIPath); os.IsNotExist(err) {
-		// Try relative path for local development
+
 		openAPIPath = "../../../../../api/openapi.yaml"
 		if _, err := os.Stat(openAPIPath); os.IsNotExist(err) {
 			openAPIPath = ""
@@ -89,6 +89,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
+	mux.HandleFunc("/api/v1/failover", s.handleFailover)
 	mux.HandleFunc("/api/v1/swagger.yaml", s.handleOpenAPISpec)
 	mux.HandleFunc("/swagger/", s.handleSwaggerUI)
 	mux.HandleFunc("/", s.handleSwaggerRedirect)
@@ -238,6 +239,46 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type failoverRequest struct {
+	TargetNode string `json:"target_node"`
+}
+
+type failoverResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func (s *Server) handleFailover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req failoverRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if req.TargetNode == "" {
+		http.Error(w, "target_node is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	s.log.Info("manual failover via REST API", zap.String("target", req.TargetNode))
+	if err := s.failover.TriggerManualFailover(r.Context(), req.TargetNode); err != nil {
+		w.WriteHeader(http.StatusConflict)
+		if encErr := json.NewEncoder(w).Encode(failoverResponse{Success: false, Message: err.Error()}); encErr != nil {
+			s.log.Warn("failed to encode response", zap.Error(encErr))
+		}
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(failoverResponse{Success: true, Message: "failover initiated"}); err != nil {
+		s.log.Warn("failed to encode response", zap.Error(err))
+	}
+}
+
 func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -272,7 +313,7 @@ func (s *Server) handleSwaggerRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
-	// Try different possible paths for swagger UI
+
 	possiblePaths := []string{
 		"/api/swagger-ui/index.html",
 		"../../../../../api/swagger-ui/index.html",
@@ -292,6 +333,5 @@ func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve the file
 	http.ServeFile(w, r, swaggerPath)
 }

@@ -6,7 +6,6 @@ import (
 )
 
 var (
-	// HeartbeatsReceived counts heartbeats received by the orchestrator monitor.
 	HeartbeatsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ha",
 		Subsystem: "monitor",
@@ -14,7 +13,6 @@ var (
 		Help:      "Total number of heartbeats received from node agents.",
 	}, []string{"node_id"})
 
-	// FailoverTotal counts failover attempts by reason and result.
 	FailoverTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ha",
 		Subsystem: "failover",
@@ -22,7 +20,6 @@ var (
 		Help:      "Total number of failover operations by reason and result.",
 	}, []string{"reason", "result"})
 
-	// FailoverDurationSeconds tracks failover duration.
 	FailoverDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ha",
 		Subsystem: "failover",
@@ -31,7 +28,6 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	})
 
-	// NodesHealthy reports the current count of healthy nodes.
 	NodesHealthy = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ha",
 		Subsystem: "cluster",
@@ -39,7 +35,6 @@ var (
 		Help:      "Current number of healthy nodes in the cluster.",
 	})
 
-	// ReplicationLagBytes reports replication lag per node.
 	ReplicationLagBytes = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ha",
 		Subsystem: "replication",
@@ -47,7 +42,6 @@ var (
 		Help:      "Replication lag in bytes per replica node.",
 	}, []string{"node_id"})
 
-	// ProbeCollectDurationSeconds tracks probe collection latency.
 	ProbeCollectDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ha",
 		Subsystem: "probe",
@@ -56,7 +50,6 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	}, []string{"node_id"})
 
-	// ReplicationReconfigureTotal counts replication reconfiguration attempts by result.
 	ReplicationReconfigureTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ha",
 		Subsystem: "replication",
@@ -64,7 +57,6 @@ var (
 		Help:      "Total number of replication reconfiguration attempts by result.",
 	}, []string{"result"})
 
-	// VersionCompatibilityCheckTotal counts version compatibility checks by result.
 	VersionCompatibilityCheckTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ha",
 		Subsystem: "failover",

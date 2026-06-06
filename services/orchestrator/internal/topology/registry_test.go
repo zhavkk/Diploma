@@ -90,7 +90,7 @@ func TestRegistry_SetPrimary(t *testing.T) {
 
 func TestRegistry_SetPrimaryNoopWhenNilTopology(t *testing.T) {
 	r := topology.NewRegistry(zap.NewNop())
-	// не паникуем при вызове SetPrimary без предварительного Update
+
 	r.SetPrimary("pg-replica1")
 	if r.Primary() != "" {
 		t.Error("expected empty primary when topology was never set")
@@ -121,10 +121,6 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
-
-// ─────────────────────────────────────────
-// UpsertNode
-// ─────────────────────────────────────────
 
 func TestRegistry_UpsertNode_AddsNewNode(t *testing.T) {
 	r := topology.NewRegistry(zap.NewNop())
@@ -187,7 +183,6 @@ func TestRegistry_UpdateNodeState_NoopForUnknownNode(t *testing.T) {
 	r := topology.NewRegistry(zap.NewNop())
 	r.UpsertNode(models.NodeStatus{NodeID: "pg-primary", State: models.StateHealthy})
 
-	// должно не паниковать и не менять существующие узлы
 	r.UpdateNodeState("pg-unknown", models.StateUnreachable)
 
 	got := r.Get()
@@ -278,7 +273,7 @@ func TestRegistry_AppendEvent_CapsAtMaxEvents(t *testing.T) {
 	if len(events) != maxEvents {
 		t.Errorf("expected %d events (capped), got %d", maxEvents, len(events))
 	}
-	// The last event should be the most recently appended.
+
 	last := events[len(events)-1]
 	wantOld := fmt.Sprintf("old-%d", maxEvents+extra-1)
 	if last.OldPrimary != wantOld {
@@ -290,9 +285,9 @@ func TestUpsertNode_DoesNotOverridePrimaryAfterFailover(t *testing.T) {
 	reg := topology.NewRegistry(zap.NewNop())
 	reg.UpsertNode(models.NodeStatus{NodeID: "n1", Role: models.RolePrimary, State: models.StateHealthy})
 	reg.UpsertNode(models.NodeStatus{NodeID: "n2", Role: models.RoleReplica, State: models.StateHealthy})
-	// simulate failover: new primary is n2
+
 	reg.SetPrimary("n2")
-	// stale heartbeat from old primary
+
 	reg.UpsertNode(models.NodeStatus{NodeID: "n1", Role: models.RolePrimary, State: models.StateHealthy})
 	if reg.Primary() != "n2" {
 		t.Fatalf("expected primary=n2, got %s", reg.Primary())

@@ -17,12 +17,16 @@ type NodeStatusProvider interface {
 	Latest() *models.NodeStatus
 }
 
+type NodeStatusRefresher interface {
+	Refresh(ctx context.Context) (*models.NodeStatus, error)
+}
+
 type Config struct {
 	NodeID             string
 	PGData             string
 	GRPCAddr           string
 	GRPCOptions        []grpc.ServerOption
-	PgRewindRetryDelay time.Duration // delay between pg_rewind retries
+	PgRewindRetryDelay time.Duration
 }
 
 type Controller struct {
@@ -84,6 +88,13 @@ func (c *Controller) PromoteNode(ctx context.Context, _ *nodeagentv1.PromoteNode
 	if err := c.commander.Promote(ctx); err != nil {
 		c.log.Error("promote failed", zap.Error(err))
 		return &nodeagentv1.PromoteNodeResponse{Success: false, Message: err.Error()}, nil
+	}
+	if refresher, ok := c.statusProv.(NodeStatusRefresher); ok {
+		refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if _, err := refresher.Refresh(refreshCtx); err != nil {
+			c.log.Warn("status refresh after promote failed", zap.Error(err))
+		}
+		cancel()
 	}
 	c.log.Info("promote successful")
 	return &nodeagentv1.PromoteNodeResponse{Success: true, Message: "promoted"}, nil

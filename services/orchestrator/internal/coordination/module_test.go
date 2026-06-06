@@ -12,15 +12,11 @@ import (
 	"github.com/zhavkk/Diploma/services/orchestrator/internal/coordination"
 )
 
-// ─────────────────────────────────────────
-// Mock EtcdBackend
-// ─────────────────────────────────────────
-
 type mockEtcd struct {
 	store             map[string]string
 	err               error
-	campaignCallCount int32 // accessed atomically
-	// failFirstN causes Campaign to return an error for the first N calls.
+	campaignCallCount int32
+
 	failFirstN  int32
 	sessionDone chan struct{}
 }
@@ -49,12 +45,12 @@ func (m *mockEtcd) Campaign(ctx context.Context, key, val string) (func(context.
 	if m.err != nil {
 		return nil, nil, m.err
 	}
-	// Fail the first failFirstN calls.
+
 	if n <= atomic.LoadInt32(&m.failFirstN) {
 		return nil, nil, errors.New("campaign: simulated transient error")
 	}
 	m.store[key] = val
-	// Use a never-closed channel if sessionDone is nil.
+
 	sessionDone := m.sessionDone
 	if sessionDone == nil {
 		sessionDone = make(chan struct{})
@@ -62,10 +58,6 @@ func (m *mockEtcd) Campaign(ctx context.Context, key, val string) (func(context.
 	resign := func(_ context.Context) error { return nil }
 	return resign, sessionDone, nil
 }
-
-// ─────────────────────────────────────────
-// Тесты
-// ─────────────────────────────────────────
 
 func TestCoordModule_IsLeader_ReturnsFalseBeforeCampaign(t *testing.T) {
 	backend := newMockEtcd()
@@ -96,7 +88,6 @@ func TestCoordModule_IsLeader_ReturnsTrueAfterCampaignSucceeds(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for Campaign to succeed.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if atomic.LoadInt32(&backend.campaignCallCount) >= 1 {
@@ -136,7 +127,6 @@ func TestCoordModule_IsLeader_ReturnsFalseAfterSessionExpires(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for Campaign to succeed (first call).
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if atomic.LoadInt32(&backend.campaignCallCount) >= 1 {
@@ -150,10 +140,8 @@ func TestCoordModule_IsLeader_ReturnsFalseAfterSessionExpires(t *testing.T) {
 		t.Fatal("expected IsLeader = true after first Campaign succeeds")
 	}
 
-	// Simulate session expiration.
 	close(sessionDone)
 
-	// Wait for Run to re-campaign (second call), which means it processed sessionDone.
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if atomic.LoadInt32(&backend.campaignCallCount) >= 2 {
@@ -162,10 +150,6 @@ func TestCoordModule_IsLeader_ReturnsFalseAfterSessionExpires(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// After session expires and before the next Campaign succeeds,
-	// leaderStatus was set to false. But since Campaign succeeds immediately
-	// in the mock, we verify the transition happened by checking the call count.
-	// The re-campaign will also set it back to true, so we just verify the flow completed.
 	if atomic.LoadInt32(&backend.campaignCallCount) < 2 {
 		t.Fatal("expected Campaign to be called at least twice after session expiry")
 	}
@@ -216,9 +200,6 @@ func TestCoordModule_IsLeader_NeverReturnsError(t *testing.T) {
 	}
 }
 
-// TestModule_Run_BecomesLeaderAndResignsOnCancel verifies that Run calls
-// Campaign, stores the leader key, and returns promptly when the context is
-// cancelled.
 func TestModule_Run_BecomesLeaderAndResignsOnCancel(t *testing.T) {
 	backend := newMockEtcd()
 	mod := coordination.NewModuleWithBackend(coordination.Config{NodeID: "node-1"}, backend, zap.NewNop())
@@ -231,10 +212,8 @@ func TestModule_Run_BecomesLeaderAndResignsOnCancel(t *testing.T) {
 		close(done)
 	}()
 
-	// Give Run a moment to call Campaign and become leader.
 	time.Sleep(50 * time.Millisecond)
 
-	// Campaign should have been called exactly once (success on first attempt).
 	if atomic.LoadInt32(&backend.campaignCallCount) < 1 {
 		t.Error("expected Campaign to be called at least once")
 	}
@@ -243,14 +222,12 @@ func TestModule_Run_BecomesLeaderAndResignsOnCancel(t *testing.T) {
 
 	select {
 	case <-done:
-		// Run returned as expected.
+
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after context cancellation")
 	}
 }
 
-// TestModule_Run_RetriesCampaignOnError verifies that Run retries Campaign after
-// transient errors until it succeeds, using exponential back-off.
 func TestCoordModule_PutClusterState_ReturnsBackendError(t *testing.T) {
 	backendErr := errors.New("etcd: connection refused")
 	backend := newMockEtcd()
@@ -283,9 +260,9 @@ func TestCoordModule_GetClusterState_ReturnsBackendError(t *testing.T) {
 
 func TestModule_Run_RetriesCampaignOnError(t *testing.T) {
 	backend := newMockEtcd()
-	// Make the first two Campaign calls fail so the retry logic is exercised.
+
 	atomic.StoreInt32(&backend.failFirstN, 2)
-	// Use a 1ms backoff so the test completes in milliseconds instead of 15+ seconds.
+
 	mod := coordination.NewModuleWithBackend(
 		coordination.Config{NodeID: "node-1", BackoffMin: time.Millisecond},
 		backend, zap.NewNop(),
@@ -296,7 +273,6 @@ func TestModule_Run_RetriesCampaignOnError(t *testing.T) {
 
 	go mod.Run(ctx)
 
-	// Poll until Campaign has been called at least 3 times (2 failures + 1 success).
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if atomic.LoadInt32(&backend.campaignCallCount) >= 3 {

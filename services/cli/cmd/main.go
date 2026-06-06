@@ -192,13 +192,10 @@ type eventRow struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
-// deriveHTTPAddr replaces the port in a gRPC address with the default HTTP port
-// (8080). This lets users specify only --addr and have the events command
-// automatically reach the orchestrator HTTP API.
 func deriveHTTPAddr(grpcAddr string) string {
 	host, _, err := net.SplitHostPort(grpcAddr)
 	if err != nil {
-		// If we cannot parse, fall back to the raw address with default HTTP port.
+
 		return grpcAddr
 	}
 	return net.JoinHostPort(host, "8080")

@@ -9,17 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestNew_ContextCancelledDuringRetry(t *testing.T) {
-	// Override retryInterval to be long so context cancellation fires during wait.
+
 	old := retryInterval
 	retryInterval = 5 * time.Second
 	t.Cleanup(func() { retryInterval = old })
 
-	// localhost:1 is an unreachable address (port 1 is reserved and not bound).
 	cfg := Config{
 		Host:    "localhost",
 		Port:    1,
@@ -28,7 +27,6 @@ func TestNew_ContextCancelledDuringRetry(t *testing.T) {
 		SSLMode: "disable",
 	}
 
-	// Cancel the context after a short delay — it will fire while waiting in retryInterval.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
@@ -42,7 +40,7 @@ func TestNew_ContextCancelledDuringRetry(t *testing.T) {
 	if !strings.Contains(err.Error(), "context") {
 		t.Errorf("expected error to contain 'context', got: %v", err)
 	}
-	// Should complete well within 2 seconds (context fires at ~200ms).
+
 	if elapsed > 2*time.Second {
 		t.Errorf("New took %v, expected < 2s", elapsed)
 	}
@@ -98,7 +96,7 @@ func TestBuildDSN_NoExtraQuoting(t *testing.T) {
 }
 
 func TestNew_FailsAfterMaxAttempts(t *testing.T) {
-	// Override retryInterval so all 10 retries complete quickly.
+
 	old := retryInterval
 	retryInterval = 10 * time.Millisecond
 	t.Cleanup(func() { retryInterval = old })
@@ -111,7 +109,6 @@ func TestNew_FailsAfterMaxAttempts(t *testing.T) {
 		SSLMode: "disable",
 	}
 
-	// Use a long-enough context so it doesn't cancel before all attempts finish.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -122,8 +119,7 @@ func TestNew_FailsAfterMaxAttempts(t *testing.T) {
 }
 
 func TestConfig_DefaultConnectionPoolSettings(t *testing.T) {
-	// Verify that zero values in Config result in zero pool settings
-	// (since sql.DB uses its own defaults when not explicitly set)
+
 	cfg := Config{
 		Host:            "localhost",
 		Port:            5432,
@@ -219,21 +215,18 @@ func TestConfig_CustomConnectionPoolSettings(t *testing.T) {
 	}
 }
 
-// TestNew_ConnectionPoolSettingsApplied verifies that connection pool settings
-// are properly applied to the underlying sql.DB. This test requires a running
-// PostgreSQL instance.
 func TestNew_ConnectionPoolSettingsApplied(t *testing.T) {
-	// Skip if no test database is configured
+
 	dsn := os.Getenv("TEST_PG_DSN")
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN not set, skipping connection pool test")
 	}
 
 	tests := []struct {
-		name     string
-		maxOpen  int
-		maxIdle  int
-		maxLife  time.Duration
+		name    string
+		maxOpen int
+		maxIdle int
+		maxLife time.Duration
 	}{
 		{
 			name:    "small pool",
@@ -259,7 +252,6 @@ func TestNew_ConnectionPoolSettingsApplied(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			// Parse DSN to extract connection parameters
 			cfg, err := parseDSN(dsn)
 			require.NoError(t, err)
 
@@ -271,13 +263,11 @@ func TestNew_ConnectionPoolSettingsApplied(t *testing.T) {
 			require.NoError(t, err)
 			defer client.Close()
 
-			// Verify settings are applied via Stats()
 			stats := client.Stats()
 			if tt.maxOpen > 0 {
 				require.Equal(t, tt.maxOpen, stats.MaxOpenConnections)
 			} else {
-				// When not set, MaxOpenConnections returns the actual limit used by sql.DB
-				// which is 0 (unlimited) when not explicitly set
+
 				require.GreaterOrEqual(t, stats.MaxOpenConnections, 0)
 			}
 		})
@@ -285,9 +275,7 @@ func TestNew_ConnectionPoolSettingsApplied(t *testing.T) {
 }
 
 func TestEnvDuration(t *testing.T) {
-	// This test verifies the EnvDuration function from pkg/config/env.go
-	// We test it here indirectly by checking that Config can be constructed
-	// with various duration values
+
 	tests := []struct {
 		input   string
 		want    time.Duration
@@ -297,7 +285,7 @@ func TestEnvDuration(t *testing.T) {
 		{"5m", 5 * time.Minute, false},
 		{"2h", 2 * time.Hour, false},
 		{"30ms", 30 * time.Millisecond, false},
-		{"invalid", 0, true}, // Would fall back to default in actual usage
+		{"invalid", 0, true},
 	}
 
 	for _, tt := range tests {
@@ -313,14 +301,10 @@ func TestEnvDuration(t *testing.T) {
 	}
 }
 
-// parseDSN parses a libpq connection string into a Config.
-// This is a simplified parser that handles the format:
-// host=... port=... user=... password=... dbname=... sslmode=...
 func parseDSN(dsn string) (Config, error) {
 	var cfg Config
-	cfg.SSLMode = "disable" // Default
+	cfg.SSLMode = "disable"
 
-	// Parse key=value pairs
 	pairs := strings.Split(dsn, " ")
 	for _, pair := range pairs {
 		parts := strings.SplitN(pair, "=", 2)
@@ -334,7 +318,7 @@ func parseDSN(dsn string) (Config, error) {
 		case "host":
 			cfg.Host = value
 		case "port":
-			// Parse port
+
 			re := regexp.MustCompile(`\d+`)
 			portStr := re.FindString(value)
 			if portStr != "" {

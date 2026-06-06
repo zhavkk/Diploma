@@ -42,7 +42,6 @@ func main() {
 		log.Fatal("TLS client credentials", zap.Error(err))
 	}
 
-	// Validate TLS certificates on startup
 	if cfg.GRPCTLSCert != "" || cfg.GRPCTLSCACert != "" {
 		result, err := tlsconfig.ValidateCertificates(cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
 		if err != nil {
@@ -50,7 +49,6 @@ func main() {
 		}
 		tlsconfig.LogValidationResults(log, result)
 
-		// Reject startup if any certificate is expired
 		if len(result.Expired) > 0 {
 			log.Fatal("cannot start: TLS certificates are expired",
 				zap.Int("expired_count", len(result.Expired)),
@@ -81,15 +79,17 @@ func main() {
 	defer sender.Close()
 
 	replWatcher := watcher.New(watcher.Config{
-		NodeID:       cfg.NodeID,
-		NodeAddr:     cfg.NodeAddr,
-		PollInterval: cfg.PollInterval,
+		NodeID:               cfg.NodeID,
+		NodeAddr:             cfg.NodeAddr,
+		PollInterval:         cfg.PollInterval,
+		PollIntervalDuration: cfg.PollIntervalDuration,
 	}, pg, log)
 
 	dbProbe := probe.New(probe.Config{
-		NodeID:       cfg.NodeID,
-		NodeAddr:     cfg.NodeAddr,
-		PollInterval: cfg.PollInterval,
+		NodeID:               cfg.NodeID,
+		NodeAddr:             cfg.NodeAddr,
+		PollInterval:         cfg.PollInterval,
+		PollIntervalDuration: cfg.PollIntervalDuration,
 	}, pg, log)
 	dbProbe.WithSender(sender)
 	dbProbe.WithWatcher(&watcherAdapter{w: replWatcher})
@@ -107,7 +107,6 @@ func main() {
 		NodeID: cfg.NodeID,
 	}, dbProbe, log)
 
-	// Start periodic certificate validation monitoring
 	tlsconfig.StartPeriodicValidation(ctx, log, cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
 
 	log.Info("node-agent started", zap.String("node_id", cfg.NodeID))
@@ -155,9 +154,6 @@ func main() {
 	log.Info("node-agent shutdown complete")
 }
 
-// watcherAdapter adapts the watcher's []pgclient.ReplicationStat to the
-// probe.ReplicationWatcher interface, which uses probe.ReplicationStat
-// to avoid a direct dependency on pgclient in the probe package.
 type watcherAdapter struct {
 	w *watcher.Watcher
 }

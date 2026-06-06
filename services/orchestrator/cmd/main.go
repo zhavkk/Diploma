@@ -35,7 +35,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Validate TLS certificates on startup
 	if cfg.GRPCTLSCert != "" || cfg.GRPCTLSCACert != "" {
 		result, err := tlsconfig.ValidateCertificates(cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
 		if err != nil {
@@ -43,7 +42,6 @@ func main() {
 		}
 		tlsconfig.LogValidationResults(log, result)
 
-		// Reject startup if any certificate is expired
 		if len(result.Expired) > 0 {
 			log.Fatal("cannot start: TLS certificates are expired",
 				zap.Int("expired_count", len(result.Expired)),
@@ -72,7 +70,6 @@ func main() {
 	}
 	defer coordModule.Close()
 
-	// Seed topology with last known primary from etcd.
 	if primary, err := coordModule.GetClusterState(ctx, "primary"); err != nil {
 		log.Warn("failed to read last primary from etcd", zap.Error(err))
 	} else if primary != "" {
@@ -95,6 +92,7 @@ func main() {
 
 	healthMon := monitor.NewMonitor(monitor.Config{
 		HeartbeatTimeout: cfg.HeartbeatTimeout,
+		CheckInterval:    cfg.CheckInterval,
 	}, failoverMgr, topoRegistry, log)
 
 	server := api.NewServer(api.Config{
@@ -110,7 +108,6 @@ func main() {
 	go failoverMgr.Run(ctx)
 	go coordModule.Run(ctx)
 
-	// Start periodic certificate validation monitoring
 	tlsconfig.StartPeriodicValidation(ctx, log, cfg.GRPCTLSCert, cfg.GRPCTLSKey, cfg.GRPCTLSCACert)
 
 	log.Info("orchestrator started", zap.String("node_id", cfg.NodeID))

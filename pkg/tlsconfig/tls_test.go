@@ -13,7 +13,7 @@ func TestServerCredentials_EmptyPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should return insecure credentials.
+
 	want := insecure.NewCredentials().Info().SecurityProtocol
 	if creds.Info().SecurityProtocol != want {
 		t.Errorf("SecurityProtocol = %q, want %q", creds.Info().SecurityProtocol, want)

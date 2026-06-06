@@ -10,19 +10,17 @@ import (
 	"github.com/zhavkk/Diploma/pkg/pgclient"
 )
 
-// Config holds watcher settings including node identity and polling interval.
 type Config struct {
-	NodeID       string
-	NodeAddr     string
-	PollInterval int
+	NodeID               string
+	NodeAddr             string
+	PollInterval         int
+	PollIntervalDuration time.Duration
 }
 
-// ReplicationStatsSource queries pg_stat_replication for downstream replica statistics.
 type ReplicationStatsSource interface {
 	ReplicationStats(ctx context.Context) ([]pgclient.ReplicationStat, error)
 }
 
-// Watcher periodically polls replication statistics from PostgreSQL. It is safe for concurrent use.
 type Watcher struct {
 	cfg    Config
 	pg     ReplicationStatsSource
@@ -31,18 +29,20 @@ type Watcher struct {
 	latest []pgclient.ReplicationStat
 }
 
-// New creates a Watcher that polls replication stats from the given PostgreSQL client.
 func New(cfg Config, pg ReplicationStatsSource, log *zap.Logger) *Watcher {
 	w := &Watcher{cfg: cfg, pg: pg, log: log}
 	if w.cfg.PollInterval <= 0 {
 		w.cfg.PollInterval = 5
 	}
+	if w.cfg.PollIntervalDuration <= 0 {
+		w.cfg.PollIntervalDuration = time.Duration(w.cfg.PollInterval) * time.Second
+	}
 	return w
 }
 
-// Run starts the watcher loop, polling replication stats until the context is cancelled.
 func (w *Watcher) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Duration(w.cfg.PollInterval) * time.Second)
+	interval := w.interval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -50,7 +50,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			tickCtx, tickCancel := context.WithTimeout(ctx, time.Duration(w.cfg.PollInterval)*time.Second)
+			tickCtx, tickCancel := context.WithTimeout(ctx, interval)
 			if err := w.SendMetrics(tickCtx); err != nil {
 				w.log.Warn("replication watcher error", zap.Error(err))
 			}
@@ -59,7 +59,13 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// Latest returns a copy of the most recently collected replication statistics.
+func (w *Watcher) interval() time.Duration {
+	if w.cfg.PollIntervalDuration > 0 {
+		return w.cfg.PollIntervalDuration
+	}
+	return time.Duration(w.cfg.PollInterval) * time.Second
+}
+
 func (w *Watcher) Latest() []pgclient.ReplicationStat {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -71,7 +77,6 @@ func (w *Watcher) Latest() []pgclient.ReplicationStat {
 	return out
 }
 
-// SendMetrics fetches replication stats from PostgreSQL and stores them for later retrieval.
 func (w *Watcher) SendMetrics(ctx context.Context) error {
 	stats, err := w.pg.ReplicationStats(ctx)
 	if err != nil {

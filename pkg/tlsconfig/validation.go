@@ -13,13 +13,11 @@ import (
 )
 
 const (
-	// NearExpirationThreshold is the duration before expiration to issue warnings.
 	NearExpirationThreshold = 30 * 24 * time.Hour
-	// PeriodicCheckInterval is how often to check certificate expiration while running.
+
 	PeriodicCheckInterval = 24 * time.Hour
 )
 
-// CertInfo contains information about a parsed certificate.
 type CertInfo struct {
 	Subject     string
 	Issuer      string
@@ -30,17 +28,12 @@ type CertInfo struct {
 	IPAddresses []string
 }
 
-// ValidationResult contains the results of certificate validation.
 type ValidationResult struct {
 	Certificates []CertInfo
 	Expiring     []CertInfo
 	Expired      []CertInfo
 }
 
-// ValidateCertificates validates server and CA certificates at the given paths.
-// If certPath or keyPath is empty, only the CA certificate is validated.
-// If caPath is empty, only the server certificate is validated.
-// Returns an error if any certificate is expired or cannot be parsed.
 func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, error) {
 	result := &ValidationResult{
 		Certificates: make([]CertInfo, 0),
@@ -51,7 +44,6 @@ func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, 
 	var certPEM, keyPEM, caPEM []byte
 	var err error
 
-	// Load server certificate and key
 	if certPath != "" {
 		certPEM, err = os.ReadFile(certPath)
 		if err != nil {
@@ -65,7 +57,6 @@ func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, 
 		}
 	}
 
-	// Load CA certificate
 	if caPath != "" {
 		caPEM, err = os.ReadFile(caPath)
 		if err != nil {
@@ -73,7 +64,6 @@ func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, 
 		}
 	}
 
-	// Validate server certificate
 	if certPEM != nil {
 		var x509Certs []*x509.Certificate
 		if keyPEM != nil {
@@ -89,7 +79,7 @@ func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, 
 				x509Certs = append(x509Certs, x509Cert)
 			}
 		} else {
-			// Parse certificate without key for validation purposes
+
 			x509Certs, err = parseCertificatesFromPEM(certPEM)
 			if err != nil {
 				return nil, fmt.Errorf("parse server certificate: %w", err)
@@ -109,14 +99,12 @@ func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, 
 		}
 	}
 
-	// Validate CA certificate
 	if caPEM != nil {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(caPEM) {
 			return nil, fmt.Errorf("invalid CA certificate")
 		}
 
-		// Parse the CA certificates to get their info
 		caCerts, err := parseCertificatesFromPEM(caPEM)
 		if err != nil {
 			return nil, fmt.Errorf("parse CA certificate: %w", err)
@@ -138,7 +126,6 @@ func ValidateCertificates(certPath, keyPath, caPath string) (*ValidationResult, 
 	return result, nil
 }
 
-// parseCertificatesFromPEM parses one or more certificates from PEM data.
 func parseCertificatesFromPEM(pemData []byte) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 
@@ -165,7 +152,6 @@ func parseCertificatesFromPEM(pemData []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-// certInfoFromX509 converts an x509.Certificate to CertInfo.
 func certInfoFromX509(cert *x509.Certificate) CertInfo {
 	info := CertInfo{
 		Subject:     cert.Subject.CommonName,
@@ -184,7 +170,6 @@ func certInfoFromX509(cert *x509.Certificate) CertInfo {
 	return info
 }
 
-// LogValidationResults logs the results of certificate validation.
 func LogValidationResults(log *zap.Logger, result *ValidationResult) {
 	if result == nil || len(result.Certificates) == 0 {
 		log.Info("no certificates to validate (TLS disabled)")
@@ -226,8 +211,6 @@ func LogValidationResults(log *zap.Logger, result *ValidationResult) {
 	}
 }
 
-// StartPeriodicValidation starts a goroutine that periodically checks certificate expiration.
-// It logs warnings for expiring certificates and errors for expired ones.
 func StartPeriodicValidation(ctx context.Context, log *zap.Logger, certPath, keyPath, caPath string) {
 	if certPath == "" && caPath == "" {
 		log.Debug("TLS disabled, skipping periodic certificate validation")
@@ -250,8 +233,6 @@ func StartPeriodicValidation(ctx context.Context, log *zap.Logger, certPath, key
 	}()
 }
 
-// checkCertificates performs a one-time certificate check and logs any issues.
-// The validation is run in a goroutine to respect context cancellation for blocking file reads.
 func checkCertificates(ctx context.Context, log *zap.Logger, certPath, keyPath, caPath string) {
 	type result struct {
 		res *ValidationResult

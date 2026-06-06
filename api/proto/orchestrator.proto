@@ -1,96 +1,60 @@
 syntax = "proto3";
-
 package orchestrator.v1;
-
 option go_package = "github.com/zhavkk/Diploma/api/proto/gen/orchestrator/v1;orchestratorv1";
-
-// OrchestratorService — gRPC API для управления кластером (SRE Engineer → Orchestrator)
-// и приёма heartbeat от Node Agent.
 service OrchestratorService {
-  // Статус кластера
   rpc GetClusterStatus(GetClusterStatusRequest) returns (GetClusterStatusResponse);
-
-  // Ручной failover: перевести выбранный узел в primary
   rpc TriggerFailover(TriggerFailoverRequest) returns (TriggerFailoverResponse);
-
-  // Изменить конфигурацию репликации (synchronous_standby_names и др.)
   rpc UpdateReplicationConfig(UpdateReplicationConfigRequest) returns (UpdateReplicationConfigResponse);
-
-  // Список узлов кластера
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
-
-  // Heartbeat от Node Agent: отправка статуса узла в оркестратор
   rpc ReportHeartbeat(ReportHeartbeatRequest) returns (ReportHeartbeatResponse);
 }
-
-// --- Cluster Status ---
-
 message GetClusterStatusRequest {}
-
 message GetClusterStatusResponse {
   ClusterStatus status = 1;
 }
-
 message ClusterStatus {
   string          primary_node = 1;
   repeated string replica_nodes = 2;
   string          topology_version = 3;
   bool            failover_in_progress = 4;
 }
-
-// --- Failover ---
-
 message TriggerFailoverRequest {
-  string target_node = 1; // узел, которому делаем promote
+  string target_node = 1;
 }
-
 message TriggerFailoverResponse {
   bool   success = 1;
   string message = 2;
 }
-
-// --- Replication Config ---
-
 message UpdateReplicationConfigRequest {
   string synchronous_standby_names = 1;
   bool   enable_sync_replication   = 2;
 }
-
 message UpdateReplicationConfigResponse {
   bool   success = 1;
   string message = 2;
 }
-
-// --- List Nodes ---
-
 message ListNodesRequest {}
-
 message ListNodesResponse {
   repeated NodeInfo nodes = 1;
 }
-
 message NodeInfo {
   string node_id   = 1;
   string address   = 2;
-  string role      = 3; // "primary" | "replica"
+  string role      = 3;
   bool   healthy   = 4;
-  int64  wal_lag   = 5; // байты отставания от primary (0 для primary)
+  int64  wal_lag   = 5;
 }
-
-// --- Heartbeat (Node Agent → Orchestrator) ---
-
 message ReportHeartbeatRequest {
   string node_id          = 1;
-  string address          = 2; // gRPC адрес агента (host:port)
-  string role             = 3; // "primary" | "replica"
+  string address          = 2;
+  string role             = 3;
   bool   is_in_recovery   = 4;
   int64  wal_replay_lsn   = 5;
   int64  replication_lag  = 6;
   bool   postgres_running = 7;
-  int64  wal_receive_lsn  = 8; // bytes received (may be ahead of replay on replica)
-  string pg_version       = 9; // PostgreSQL version string
+  int64  wal_receive_lsn  = 8;
+  string pg_version       = 9;
 }
-
 message ReportHeartbeatResponse {
   bool ok = 1;
 }
