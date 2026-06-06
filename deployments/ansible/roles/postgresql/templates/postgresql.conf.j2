@@ -1,4 +1,8 @@
-# postgresql.conf — managed by Ansible
+data_directory = '/var/lib/postgresql/{{ pg_version }}/main'
+hba_file = '/etc/postgresql/{{ pg_version }}/main/pg_hba.conf'
+ident_file = '/etc/postgresql/{{ pg_version }}/main/pg_ident.conf'
+external_pid_file = '/var/run/postgresql/{{ pg_version }}-main.pid'
+
 listen_addresses = '*'
 port = {{ pg_port }}
 

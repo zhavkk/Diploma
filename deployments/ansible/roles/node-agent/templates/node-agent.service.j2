@@ -12,6 +12,9 @@ Environment=ORCHESTRATOR_ADDR={{ orchestrator_addr }}
 Environment=PG_USER={{ pg_user }}
 Environment=PG_PASSWORD={{ pg_password }}
 Environment=PGDATA=/var/lib/postgresql/{{ pg_version }}/main
+Environment=POLL_INTERVAL={{ poll_interval | default('2') }}
+Environment=POLL_INTERVAL_DURATION={{ poll_interval_duration | default((poll_interval | default('2') | string) ~ 's') }}
+Environment=PATH=/usr/lib/postgresql/{{ pg_version }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/node-agent
 Restart=always
 RestartSec=5

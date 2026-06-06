@@ -23,7 +23,7 @@ listen pg_primary
     option httpchk GET /health/primary
     http-check expect status 200
 {% for host in groups['pg_nodes'] %}
-    server {{ host }}   {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['pg_port'] }}   check addr {{ hostvars[host]['ansible_host'] }} port {{ hostvars[host]['node_agent_http_port'] }} inter 2s fall 2 rise 1{% if not loop.first %} backup{% endif %}
+    server {{ host }}   {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['pg_port'] }}   check addr {{ hostvars[host]['ansible_host'] }} port {{ hostvars[host]['node_agent_http_port'] }} inter 1s fall 1 rise 1{% if not loop.first %} backup{% endif %}
 
 {% endfor %}
 
@@ -34,7 +34,7 @@ listen pg_replicas
     option httpchk GET /health/replica
     http-check expect status 200
 {% for host in groups['pg_nodes'] | select('ne', 'pg-primary') %}
-    server {{ host }}   {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['pg_port'] }}   check addr {{ hostvars[host]['ansible_host'] }} port {{ hostvars[host]['node_agent_http_port'] }} inter 2s fall 2 rise 1
+    server {{ host }}   {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['pg_port'] }}   check addr {{ hostvars[host]['ansible_host'] }} port {{ hostvars[host]['node_agent_http_port'] }} inter 1s fall 1 rise 1
 
 {% endfor %}
-    server pg-primary   {{ hostvars['pg-primary']['ansible_host'] }}:{{ hostvars['pg-primary']['pg_port'] }}   check addr {{ hostvars['pg-primary']['ansible_host'] }} port {{ hostvars['pg-primary']['node_agent_http_port'] }} inter 2s fall 2 rise 1 backup
+    server pg-primary   {{ hostvars['pg-primary']['ansible_host'] }}:{{ hostvars['pg-primary']['pg_port'] }}   check addr {{ hostvars['pg-primary']['ansible_host'] }} port {{ hostvars['pg-primary']['node_agent_http_port'] }} inter 1s fall 1 rise 1 backup

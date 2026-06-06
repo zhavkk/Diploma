@@ -1,5 +1,4 @@
 ---
-# Deploy etcd for distributed coordination
 
 - name: Install etcd
   get_url:

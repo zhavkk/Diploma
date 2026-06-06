@@ -10,6 +10,7 @@ Environment=ETCD_ENDPOINTS={% for h in groups['etcd_nodes'] %}http://{{ hostvars
 Environment=GRPC_ADDR=:{{ grpc_port | default('50051') }}
 Environment=HTTP_ADDR=:{{ http_port | default('8080') }}
 Environment=HEARTBEAT_TIMEOUT={{ heartbeat_timeout | default('10') }}
+Environment=CHECK_INTERVAL={{ check_interval | default('500ms') }}
 Environment=QUORUM_SIZE={{ quorum_size | default('1') }}
 Environment=REPLICATION_USER={{ replication_user | default('replicator') }}
 Environment=REPLICATION_PASSWORD={{ replication_password | default('replicator') }}

@@ -1,32 +1,16 @@
-# Prometheus configuration for HA PostgreSQL Cluster monitoring
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
     cluster: 'ha-postgres-cluster'
     environment: 'development'
-
-# Alertmanager configuration (optional, for future use)
-# alerting:
-#   alertmanagers:
-#     - static_configs:
-#         - targets: []
-
-# Load rules once and periodically evaluate them
-# rule_files:
-#   - "alerts/*.yml"
-
-# Scrape configurations
 scrape_configs:
-  # Orchestrator metrics
   - job_name: 'orchestrator'
     static_configs:
       - targets: ['orchestrator:8080']
         labels:
           service: 'orchestrator'
           component: 'control-plane'
-
-  # Node Agent - Primary
   - job_name: 'node-agent-primary'
     static_configs:
       - targets: ['node-agent-primary:8081']
@@ -34,8 +18,6 @@ scrape_configs:
           service: 'node-agent'
           node_id: 'pg-primary'
           role: 'primary'
-
-  # Node Agent - Replica 1
   - job_name: 'node-agent-replica1'
     static_configs:
       - targets: ['node-agent-replica1:8081']
@@ -43,8 +25,6 @@ scrape_configs:
           service: 'node-agent'
           node_id: 'pg-replica1'
           role: 'replica'
-
-  # Node Agent - Replica 2
   - job_name: 'node-agent-replica2'
     static_configs:
       - targets: ['node-agent-replica2:8081']
@@ -52,8 +32,6 @@ scrape_configs:
           service: 'node-agent'
           node_id: 'pg-replica2'
           role: 'replica'
-
-  # PostgreSQL Primary
   - job_name: 'postgres-primary'
     static_configs:
       - targets: ['postgres-exporter-primary:9187']
@@ -61,8 +39,6 @@ scrape_configs:
           service: 'postgres'
           node_id: 'pg-primary'
           role: 'primary'
-
-  # PostgreSQL Replica 1
   - job_name: 'postgres-replica1'
     static_configs:
       - targets: ['postgres-exporter-replica1:9187']
@@ -70,8 +46,6 @@ scrape_configs:
           service: 'postgres'
           node_id: 'pg-replica1'
           role: 'replica'
-
-  # PostgreSQL Replica 2
   - job_name: 'postgres-replica2'
     static_configs:
       - targets: ['postgres-exporter-replica2:9187']
@@ -79,8 +53,6 @@ scrape_configs:
           service: 'postgres'
           node_id: 'pg-replica2'
           role: 'replica'
-
-  # HAProxy metrics (if stats enabled)
   - job_name: 'haproxy'
     static_configs:
       - targets: ['haproxy:7000']

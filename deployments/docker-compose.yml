@@ -1,8 +1,5 @@
 version: "3.9"
 
-# HA PostgreSQL Cluster + Orchestrator
-# Запуск: docker compose up -d
-
 networks:
   ha-net:
     driver: bridge
@@ -16,10 +13,6 @@ volumes:
   grafana-data:
 
 services:
-
-  # ─────────────────────────────────────────
-  # etcd — distributed coordination
-  # ─────────────────────────────────────────
   etcd:
     image: quay.io/coreos/etcd:v3.5.16
     environment:
@@ -32,10 +25,6 @@ services:
       - ha-net
     ports:
       - "2379:2379"
-
-  # ─────────────────────────────────────────
-  # PostgreSQL Primary
-  # ─────────────────────────────────────────
   pg-primary:
     image: postgres:16
     environment:
@@ -59,10 +48,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-
-  # ─────────────────────────────────────────
-  # Node Agent на Primary
-  # ─────────────────────────────────────────
   node-agent-primary:
     build:
       context: ..
@@ -75,13 +60,10 @@ services:
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
-      POLL_INTERVAL: "2"
+      POLL_INTERVAL: "1"
+      POLL_INTERVAL_DURATION: "500ms"
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
-      # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
-      # PG_MAX_OPEN_CONNS: "25"
-      # PG_MAX_IDLE_CONNS: "5"
-      # PG_CONN_MAX_LIFETIME: "5m"
     volumes:
       - pg-primary-data:/var/lib/postgresql/data
     pid: "service:pg-primary"
@@ -100,10 +82,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-
-  # ─────────────────────────────────────────
-  # PostgreSQL Replica 1 (синхронная)
-  # ─────────────────────────────────────────
   pg-replica1:
     image: postgres:16
     environment:
@@ -144,13 +122,10 @@ services:
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
-      POLL_INTERVAL: "2"
+      POLL_INTERVAL: "1"
+      POLL_INTERVAL_DURATION: "500ms"
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
-      # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
-      # PG_MAX_OPEN_CONNS: "25"
-      # PG_MAX_IDLE_CONNS: "5"
-      # PG_CONN_MAX_LIFETIME: "5m"
     volumes:
       - pg-replica1-data:/var/lib/postgresql/data
     pid: "service:pg-replica1"
@@ -169,10 +144,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-
-  # ─────────────────────────────────────────
-  # PostgreSQL Replica 2 (асинхронная)
-  # ─────────────────────────────────────────
   pg-replica2:
     image: postgres:16
     environment:
@@ -213,13 +184,10 @@ services:
       PG_USER: postgres
       PG_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data
-      POLL_INTERVAL: "2"
+      POLL_INTERVAL: "1"
+      POLL_INTERVAL_DURATION: "500ms"
       GRPC_ADDR: ":50052"
       HEALTH_ADDR: ":8081"
-      # PostgreSQL connection pool settings (defaults: MaxOpenConns=25, MaxIdleConns=5, ConnMaxLifetime=5m)
-      # PG_MAX_OPEN_CONNS: "25"
-      # PG_MAX_IDLE_CONNS: "5"
-      # PG_CONN_MAX_LIFETIME: "5m"
     volumes:
       - pg-replica2-data:/var/lib/postgresql/data
     pid: "service:pg-replica2"
@@ -238,10 +206,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-
-  # ─────────────────────────────────────────
-  # HA Orchestrator (Control Plane)
-  # ─────────────────────────────────────────
   orchestrator:
     build:
       context: ..
@@ -250,7 +214,8 @@ services:
       NODE_ID: "orchestrator-1"
       GRPC_ADDR: ":50051"
       HTTP_ADDR: ":8080"
-      HEARTBEAT_TIMEOUT: "6"
+      HEARTBEAT_TIMEOUT: "3"
+      CHECK_INTERVAL: "500ms"
       QUORUM_SIZE: "1"
       ETCD_ENDPOINTS: "etcd:2379"
       REPLICATION_USER: "replicator"
@@ -269,10 +234,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
-
-  # ─────────────────────────────────────────
-  # HAProxy — load balancer
-  # ─────────────────────────────────────────
   haproxy:
     image: haproxy:2.9
     volumes:
@@ -287,31 +248,23 @@ services:
       - "5000:5000"
       - "5001:5001"
       - "7000:7000"
-
-  # ─────────────────────────────────────────
-  # Log writer — simple client workload via HAProxy write endpoint
-  # ─────────────────────────────────────────
   log-writer:
-    image: postgres:16
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.log-writer
     environment:
-      PGHOST: haproxy
-      PGPORT: "5000"
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: postgres
-      PGCONNECT_TIMEOUT: "1"
-    volumes:
-      - ./scripts/log-writer.sh:/usr/local/bin/log-writer.sh:ro
-    entrypoint: ["/bin/bash", "/usr/local/bin/log-writer.sh"]
+      DATABASE_URL: "postgres://postgres:postgres@haproxy:5000/postgres?sslmode=disable&connect_timeout=1"
+      SERVICE_NAME: "demo-log-service"
+      INSTANCE_NAME: "docker-local"
+      WRITE_INTERVAL: "1s"
+      HTTP_ADDR: ":8090"
     networks:
       - ha-net
     depends_on:
       - haproxy
+    ports:
+      - "8090:8090"
     restart: unless-stopped
-
-  # ─────────────────────────────────────────
-  # Prometheus — metrics collection
-  # ─────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.45.0
     command:
@@ -337,10 +290,6 @@ services:
     ports:
       - "9090:9090"
     restart: unless-stopped
-
-  # ─────────────────────────────────────────
-  # Grafana — visualization
-  # ─────────────────────────────────────────
   grafana:
     image: grafana/grafana:10.2.0
     environment:
@@ -358,10 +307,6 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
-
-  # ─────────────────────────────────────────
-  # PostgreSQL Exporters
-  # ─────────────────────────────────────────
   postgres-exporter-primary:
     image: prometheuscommunity/postgres-exporter:v0.12.0
     environment:

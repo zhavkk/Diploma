@@ -1,7 +1,4 @@
 ---
-# Деплой node-agent на каждый PostgreSQL-узел
-# node-agent запускается co-located с PostgreSQL (на том же хосте),
-# т.к. нуждается в доступе к локальному PGDATA и pg_ctl
 
 - name: Copy node-agent binary
   copy:

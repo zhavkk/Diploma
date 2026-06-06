@@ -1,6 +1,4 @@
 ---
-# Главный playbook — деплой всего кластера
-# Запуск: ansible-playbook -i inventory.yml site.yml
 
 - name: Deploy etcd cluster
   hosts: etcd_nodes
@@ -8,8 +6,15 @@
   roles:
     - etcd
 
-- name: Deploy PostgreSQL nodes
-  hosts: pg_nodes
+- name: Deploy PostgreSQL primary
+  hosts: pg-primary
+  become: true
+  roles:
+    - postgresql
+    - node-agent
+
+- name: Deploy PostgreSQL replicas
+  hosts: pg_nodes:!pg-primary
   become: true
   roles:
     - postgresql

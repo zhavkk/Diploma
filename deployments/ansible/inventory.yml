@@ -1,10 +1,9 @@
 all:
   vars:
-    ansible_user: ubuntu
-    ansible_ssh_private_key_file: ~/.ssh/id_rsa
+    ansible_user: root
+    ansible_ssh_private_key_file: /home/zhava/Desktop/Diploma/.secrets/diploma_vps_ed25519
     pg_version: 16
     pg_user: postgres
-    # In production, replace with vault: pg_password: "{{ vault_pg_password }}"
     pg_password: "postgres"
     replication_user: replicator
     replication_password: replicator
@@ -14,60 +13,59 @@ all:
     pg_nodes:
       hosts:
         pg-primary:
-          ansible_host: 192.168.1.10
+          ansible_host: 108.165.32.190
           node_id: pg-primary
           pg_role: primary
           pg_port: 5432
           node_agent_http_port: 8081
           node_agent_grpc_port: 50052
+          poll_interval: 1
+          poll_interval_duration: 500ms
 
         pg-replica1:
-          ansible_host: 192.168.1.11
+          ansible_host: 108.165.32.194
           node_id: pg-replica1
           pg_role: replica
           pg_port: 5432
           node_agent_http_port: 8081
           node_agent_grpc_port: 50052
           replication_type: sync
+          poll_interval: 1
+          poll_interval_duration: 500ms
 
         pg-replica2:
-          ansible_host: 192.168.1.12
+          ansible_host: 108.165.33.214
           node_id: pg-replica2
           pg_role: replica
           pg_port: 5432
           node_agent_http_port: 8081
           node_agent_grpc_port: 50052
           replication_type: async
+          poll_interval: 1
+          poll_interval_duration: 500ms
 
     etcd_nodes:
       hosts:
         etcd-1:
-          ansible_host: 192.168.1.20
-          etcd_peer_port: 2380
-          etcd_client_port: 2379
-        etcd-2:
-          ansible_host: 192.168.1.21
-          etcd_peer_port: 2380
-          etcd_client_port: 2379
-        etcd-3:
-          ansible_host: 192.168.1.22
+          ansible_host: 108.165.33.221
           etcd_peer_port: 2380
           etcd_client_port: 2379
 
     orchestrator:
       hosts:
         orchestrator:
-          ansible_host: 192.168.1.30
+          ansible_host: 108.165.33.221
           node_id: orchestrator-1
           grpc_port: 50051
           http_port: 8080
-          heartbeat_timeout: 10
+          heartbeat_timeout: 3
+          check_interval: 500ms
           quorum_size: 1
 
     haproxy:
       hosts:
         haproxy:
-          ansible_host: 192.168.1.40
+          ansible_host: 108.165.33.221
           write_port: 5000
           read_port: 5001
           stats_port: 7000

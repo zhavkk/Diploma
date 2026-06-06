@@ -1,5 +1,4 @@
 ---
-# Deploy HAProxy for PostgreSQL load balancing
 
 - name: Install HAProxy
   apt:
